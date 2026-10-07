@@ -18,7 +18,7 @@ import { POST as createSession } from "./sessions/route";
 import { GET as readMessages, POST as sendMessage } from "./sessions/[id]/messages/route";
 import { POST as confirmProposal } from "./sessions/[id]/handoffs/[proposalId]/confirm/route";
 import { POST as cancelProposal } from "./sessions/[id]/handoffs/[proposalId]/cancel/route";
-import type { ChatMessageLog, ChatRuntime, SessionStore } from "./runtime";
+import { installChatRuntime, type ChatMessageLog, type ChatRuntime, type SessionStore } from "./runtime";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const otherSessionId = "55555555-5555-4555-8555-555555555555";
@@ -32,6 +32,16 @@ const openCase = {
   orderNumber: "#AB12",
   status: "open" as const,
 };
+
+test("POST /api/chat/sessions returns 200 and a session id when Next passes two arguments", async () => {
+  const runtime = chatRuntime([sessionId]);
+  installChatRuntime(runtime);
+
+  const response = await createSession(jsonRequest({}), undefined);
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ id: sessionId });
+});
 
 test("POST /api/chat/sessions returns the id and stores the timezone", async () => {
   const runtime = chatRuntime([sessionId, otherSessionId]);

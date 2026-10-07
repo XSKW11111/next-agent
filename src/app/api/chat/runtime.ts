@@ -20,3 +20,16 @@ export type ChatRuntime = {
   readonly dependencies: SupportTurnDependencies;
   readonly newSessionId: () => string;
 };
+
+let installedChatRuntime: ChatRuntime | undefined;
+
+export function installChatRuntime(runtime: ChatRuntime): void {
+  installedChatRuntime = runtime;
+}
+
+export function currentChatRuntime(): ChatRuntime {
+  if (installedChatRuntime === undefined) {
+    throw new Error("chat runtime is not installed");
+  }
+  return installedChatRuntime;
+}
