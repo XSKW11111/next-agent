@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { parseSession, type LocalTimezone } from "../../../../domain/session";
-import type { ChatRuntime } from "../runtime";
+import { currentChatRuntime, type ChatRuntime } from "../runtime";
 
 const createSessionBodySchema = z.strictObject({
   timezone: z.string().optional(),
@@ -9,7 +9,7 @@ const createSessionBodySchema = z.strictObject({
 export async function POST(
   request: Request,
   _context: unknown,
-  runtime: ChatRuntime,
+  runtime: ChatRuntime = currentChatRuntime(),
 ): Promise<Response> {
   const body = await readBody(request);
   if (!body.ok) return invalid();

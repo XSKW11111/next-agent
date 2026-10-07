@@ -2,7 +2,7 @@ import { z } from "zod";
 import { sessionIdSchema, type SessionId } from "../../../../../../domain/session";
 import { parseTurn } from "../../../../../../domain/turn";
 import { submitTurn, type SubmitTurnResult } from "../../../../../../service/turn/submit-turn";
-import type { ChatRuntime } from "../../../runtime";
+import { currentChatRuntime, type ChatRuntime } from "../../../runtime";
 
 const sendTurnBodySchema = z.strictObject({
   turnId: z.uuid(),
@@ -16,7 +16,7 @@ type SessionContext = {
 export async function POST(
   request: Request,
   context: SessionContext,
-  runtime: ChatRuntime,
+  runtime: ChatRuntime = currentChatRuntime(),
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
@@ -48,7 +48,7 @@ export async function POST(
 export async function GET(
   _request: Request,
   context: SessionContext,
-  runtime: ChatRuntime,
+  runtime: ChatRuntime = currentChatRuntime(),
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
