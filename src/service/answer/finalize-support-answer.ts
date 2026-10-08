@@ -1,4 +1,4 @@
-const outageSentence = "That service is temporarily unavailable.";
+export const outageSentence = "That service is temporarily unavailable.";
 const emptyModelSentence = "Something was wrong with the model output, Please try again";
 
 const modelHintKeys = new Set(["unmatched_order_count", "handoff_eligible"]);
