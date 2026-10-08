@@ -7,3 +7,5 @@ coverage/
 .env
 .env.local
 *.tsbuildinfo
+
+next-agent-system-architecture.md
