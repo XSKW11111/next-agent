@@ -83,9 +83,9 @@ test("the same turn id and the same text returns the saved reply", async () => {
   );
 
   expect(first.status).toBe(200);
-  expect(await first.json()).toEqual({ reply: "On the way." });
+  expect(await streamedReply(first)).toBe("On the way.");
   expect(second.status).toBe(200);
-  expect(await second.json()).toEqual({ reply: "On the way." });
+  expect(await streamedReply(second)).toBe("On the way.");
   expect(calls.count).toBe(1);
 });
 
@@ -192,6 +192,25 @@ test("cancel creates no case and a later confirm leaves that decision", async ()
   expect(await later.json()).toEqual({ decision: "cancelled" });
   expect(runtime.proposals.cases()).toEqual([]);
 });
+
+async function streamedReply(response: Response): Promise<string> {
+  const body = await response.text();
+  let reply = "";
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const payload = line.slice("data: ".length);
+    if (payload === "[DONE]") continue;
+    const chunk: unknown = JSON.parse(payload);
+    if (!isRecord(chunk) || chunk.type !== "text-delta") continue;
+    if (typeof chunk.delta !== "string") throw new Error("text-delta was missing delta");
+    reply += chunk.delta;
+  }
+  return reply;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/chat", {

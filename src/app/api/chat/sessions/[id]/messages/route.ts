@@ -2,6 +2,7 @@ import { z } from "zod";
 import { sessionIdSchema, type SessionId } from "../../../../../../domain/session";
 import { parseTurn } from "../../../../../../domain/turn";
 import { submitTurn, type SubmitTurnResult } from "../../../../../../service/turn/submit-turn";
+import { replyStreamResponse } from "../../../reply-stream";
 import { currentChatRuntime, type ChatRuntime } from "../../../runtime";
 
 const sendTurnBodySchema = z.strictObject({
@@ -63,7 +64,7 @@ export async function GET(
 function turnResponse(result: SubmitTurnResult): Response {
   switch (result.kind) {
     case "reply":
-      return Response.json({ reply: result.reply });
+      return replyStreamResponse(result.reply);
     case "rejected":
       return Response.json({ code: "rejected" }, { status: 409 });
     case "already_submitted":
