@@ -1,8 +1,33 @@
+import type { UIMessage } from "ai";
 import { z } from "zod";
 
 export const sessionStorageKey = "next-agent.session-id";
 
 const sessionIdSchema = z.uuid();
+
+const storedMessageSchema = z.strictObject({
+  role: z.enum(["customer", "assistant"]),
+  content: z.string(),
+  sequence: z.number().int(),
+  turnId: z.uuid(),
+  sessionId: z.uuid(),
+});
+
+export const supportHistorySchema = z.strictObject({
+  messages: z.array(storedMessageSchema),
+});
+
+export function supportMessages(
+  rows: readonly z.infer<typeof storedMessageSchema>[],
+): UIMessage[] {
+  return [...rows]
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((row) => ({
+      id: `${row.turnId}:${row.role}`,
+      role: row.role === "customer" ? "user" : "assistant",
+      parts: [{ type: "text" as const, text: row.content }],
+    }));
+}
 
 type SessionStorage = Pick<Storage, "getItem" | "setItem">;
 

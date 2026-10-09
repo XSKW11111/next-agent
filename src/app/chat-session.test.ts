@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { loadChatSession } from "./chat-session";
+import { loadChatSession, supportMessages } from "./chat-session";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 
@@ -82,6 +82,28 @@ test("a failed create can be retried", async () => {
   );
   expect(calls).toBe(2);
   expect(storage.getItem("next-agent.session-id")).toBe(sessionId);
+});
+
+test("history is ordered by sequence and spoken as user or assistant", () => {
+  const turnId = "22222222-2222-4222-8222-222222222222";
+
+  expect(
+    supportMessages([
+      { role: "assistant", content: "On the way.", sequence: 2, turnId, sessionId },
+      { role: "customer", content: "where is my order", sequence: 1, turnId, sessionId },
+    ]),
+  ).toEqual([
+    {
+      id: `${turnId}:customer`,
+      role: "user",
+      parts: [{ type: "text", text: "where is my order" }],
+    },
+    {
+      id: `${turnId}:assistant`,
+      role: "assistant",
+      parts: [{ type: "text", text: "On the way." }],
+    },
+  ]);
 });
 
 function memoryStorage(initial: Record<string, string> = {}): Pick<Storage, "getItem" | "setItem"> {

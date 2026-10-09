@@ -21,6 +21,9 @@
         "name": "next"
       }
     ],
+    "paths": {
+      "@/*": ["./src/*"]
+    },
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "allowJs": true
