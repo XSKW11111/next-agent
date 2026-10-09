@@ -2,6 +2,7 @@ import type { Session, SessionId } from "../../../domain/session";
 import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
 import type { ProposalStore } from "../../../service/handoff/handoff";
 import type { MessageStore, TurnMessage } from "../../../service/turn/message-store";
+import { memoryChatRuntime } from "./memory-runtime";
 
 export type SessionStore = {
   save(session: Session): void;
@@ -28,8 +29,6 @@ export function installChatRuntime(runtime: ChatRuntime): void {
 }
 
 export function currentChatRuntime(): ChatRuntime {
-  if (installedChatRuntime === undefined) {
-    throw new Error("chat runtime is not installed");
-  }
+  installedChatRuntime ??= memoryChatRuntime();
   return installedChatRuntime;
 }
