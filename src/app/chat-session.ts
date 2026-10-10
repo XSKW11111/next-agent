@@ -49,7 +49,17 @@ function messageParts(
   return [text, { type: "data-handoff", id: handoff.proposalId, data: handoff }];
 }
 
-type SessionStorage = Pick<Storage, "getItem" | "setItem">;
+const handoffDecisionSchema = z.object({
+  decision: z.enum(["confirmed", "cancelled"]),
+});
+
+export function handoffDecision(body: unknown): "confirmed" | "cancelled" | undefined {
+  const parsed = handoffDecisionSchema.safeParse(body);
+  if (!parsed.success) return undefined;
+  return parsed.data.decision;
+}
+
+type SessionStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 type PendingSession = {
   current: Promise<string> | undefined;
@@ -80,4 +90,9 @@ export function loadChatSession(input: {
       throw error;
     });
   return pending.current;
+}
+
+export function forgetChatSession(storage: SessionStorage, pending: PendingSession = pendingSession): void {
+  storage.removeItem(sessionStorageKey);
+  pending.current = undefined;
 }

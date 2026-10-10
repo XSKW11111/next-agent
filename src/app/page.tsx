@@ -24,7 +24,13 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { handoffPartSchema, type HandoffPart } from "../domain/handoff";
-import { loadChatSession, supportHistorySchema, supportMessages } from "./chat-session";
+import {
+  forgetChatSession,
+  handoffDecision,
+  loadChatSession,
+  supportHistorySchema,
+  supportMessages,
+} from "./chat-session";
 
 type SessionLoad =
   | { kind: "loading" }
@@ -36,14 +42,9 @@ export default function Page() {
 
   useEffect(() => {
     let cancelled = false;
-    loadChatSession({
-      storage: sessionStorage,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      request: requestSession,
-    })
-      .then(async (sessionId) => {
-        const history = await requestHistory(sessionId);
-        if (!cancelled) setLoad({ kind: "ready", sessionId, history });
+    openChat(sessionStorage, Intl.DateTimeFormat().resolvedOptions().timeZone)
+      .then((ready) => {
+        if (!cancelled) setLoad({ kind: "ready", sessionId: ready.sessionId, history: ready.history });
       })
       .catch(() => {
         if (!cancelled) setLoad({ kind: "failed" });
@@ -148,8 +149,31 @@ function SupportChat({ sessionId, history }: { sessionId: string; history: UIMes
   );
 }
 
+async function openChat(
+  storage: Pick<Storage, "getItem" | "setItem" | "removeItem">,
+  timezone: string,
+): Promise<{ sessionId: string; history: UIMessage[] }> {
+  const sessionId = await loadChatSession({ storage, timezone, request: requestSession });
+  try {
+    return { sessionId, history: await requestHistory(sessionId) };
+  } catch (error) {
+    if (!(error instanceof MissingSession)) throw error;
+    forgetChatSession(storage);
+    const replacement = await loadChatSession({ storage, timezone, request: requestSession });
+    return { sessionId: replacement, history: await requestHistory(replacement) };
+  }
+}
+
+class MissingSession extends Error {
+  constructor() {
+    super("session was missing");
+    this.name = "MissingSession";
+  }
+}
+
 async function requestHistory(sessionId: string): Promise<UIMessage[]> {
   const response = await fetch(`/api/chat/sessions/${sessionId}/messages`);
+  if (response.status === 404) throw new MissingSession();
   if (!response.ok) throw new Error("history was not loaded");
   const body: unknown = await response.json();
   const parsed = supportHistorySchema.safeParse(body);
@@ -251,7 +275,9 @@ async function postHandoffDecision(
     method: "POST",
   });
   if (!response.ok) return;
-  const decision = decisionFor(command);
+  const body: unknown = await response.json();
+  const decision = handoffDecision(body);
+  if (decision === undefined) return;
   setMessages((current) =>
     current.map((message) => ({
       ...message,
@@ -262,19 +288,6 @@ async function postHandoffDecision(
       ),
     })),
   );
-}
-
-function decisionFor(command: "confirm" | "cancel"): "confirmed" | "cancelled" {
-  switch (command) {
-    case "confirm":
-      return "confirmed";
-    case "cancel":
-      return "cancelled";
-    default: {
-      const unexpected: never = command;
-      return unexpected;
-    }
-  }
 }
 
 function handoffId(data: unknown): string | undefined {

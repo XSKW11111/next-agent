@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { loadChatSession, supportMessages } from "./chat-session";
+import { forgetChatSession, handoffDecision, loadChatSession, supportMessages } from "./chat-session";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 
@@ -158,7 +158,32 @@ test("a proposal is attached only to the matching assistant row", () => {
   ]);
 });
 
-function memoryStorage(initial: Record<string, string> = {}): Pick<Storage, "getItem" | "setItem"> {
+test("a stored decision wins over the button that was clicked", () => {
+  expect(handoffDecision({ decision: "confirmed", supportCase: { id: sessionId } })).toBe("confirmed");
+  expect(handoffDecision({ decision: "cancelled" })).toBe("cancelled");
+  expect(handoffDecision({ decision: "pending" })).toBeUndefined();
+});
+
+test("forgetting a session drops the stored id and the in-flight promise", async () => {
+  const storage = memoryStorage({ "next-agent.session-id": sessionId });
+  const pending = { current: Promise.resolve(sessionId) };
+  const nextId = "55555555-5555-4555-8555-555555555555";
+
+  forgetChatSession(storage, pending);
+  const loaded = await loadChatSession({
+    storage,
+    timezone: "America/Chicago",
+    pending,
+    request: async () => nextId,
+  });
+
+  expect(loaded).toBe(nextId);
+  expect(storage.getItem("next-agent.session-id")).toBe(nextId);
+});
+
+function memoryStorage(
+  initial: Record<string, string> = {},
+): Pick<Storage, "getItem" | "setItem" | "removeItem"> {
   const values = new Map(Object.entries(initial));
   return {
     getItem(key) {
@@ -166,6 +191,9 @@ function memoryStorage(initial: Record<string, string> = {}): Pick<Storage, "get
     },
     setItem(key, value) {
       values.set(key, value);
+    },
+    removeItem(key) {
+      values.delete(key);
     },
   };
 }
