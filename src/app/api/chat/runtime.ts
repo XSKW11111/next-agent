@@ -1,11 +1,13 @@
+import type { AgentConfig } from "@/infra/agent-config";
+import { liveChatRuntime } from "@/infra/live-runtime";
 import type { Session, SessionId } from "../../../domain/session";
 import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
 import type { ProposalStore } from "../../../service/handoff/handoff";
 import type { MessageStore, TurnMessage } from "../../../service/turn/message-store";
 
 export type SessionStore = {
-  save(session: Session): void;
-  find(id: SessionId): Session | undefined;
+  save(session: Session): Promise<void>;
+  find(id: SessionId): Promise<Session | undefined>;
 };
 
 export type ChatMessageLog = MessageStore & {
@@ -13,6 +15,7 @@ export type ChatMessageLog = MessageStore & {
 };
 
 export type ChatRuntime = {
+  readonly config: AgentConfig;
   readonly sessions: SessionStore;
   readonly messages: ChatMessageLog;
   readonly proposals: ProposalStore;
@@ -29,7 +32,7 @@ export function installChatRuntime(runtime: ChatRuntime): void {
 
 export function currentChatRuntime(): ChatRuntime {
   if (installedChatRuntime === undefined) {
-    throw new Error("chat runtime is not installed");
+    installedChatRuntime = liveChatRuntime(process.env);
   }
   return installedChatRuntime;
 }

@@ -14,6 +14,7 @@ export type SubmitTurnInput = {
   readonly messages: MessageStore;
   readonly model: ScriptedModel;
   readonly dependencies: SupportTurnDependencies;
+  readonly maxToolRounds?: number;
 };
 
 type RecordedTurn =
@@ -39,7 +40,7 @@ export async function submitTurn(input: SubmitTurnInput): Promise<SubmitTurnResu
     case "submitted":
       return { kind: "already_submitted" };
     case "new":
-      return saveNewTurn(input.messages, input.model, input.dependencies, turn.value);
+      return saveNewTurn(input.messages, input.model, input.dependencies, turn.value, input.maxToolRounds);
     default: {
       const unexpected: never = recorded;
       return unexpected;
@@ -52,6 +53,7 @@ async function saveNewTurn(
   model: ScriptedModel,
   dependencies: SupportTurnDependencies,
   turn: Turn,
+  maxToolRounds: number | undefined,
 ): Promise<SubmitTurnResult> {
   await insertRow(messages, {
     sessionId: turn.sessionId,
@@ -66,6 +68,7 @@ async function saveNewTurn(
     threadId: turn.sessionId,
     customerText: turn.text,
     dependencies,
+    ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
   });
 
   await insertRow(messages, {

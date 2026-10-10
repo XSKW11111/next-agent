@@ -20,7 +20,8 @@ export async function POST(
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
-  if (runtime.sessions.find(sessionId.value) === undefined) return missing();
+  const session = await runtime.sessions.find(sessionId.value);
+  if (session === undefined) return missing();
 
   const body = await readBody(request);
   if (!body.ok) return invalid();
@@ -34,13 +35,27 @@ export async function POST(
   });
   if (!turn.ok) return invalid();
 
+  const existing = runtime.proposals.findProposalForTurn(session.id, turn.value.id);
   const result = await submitTurn({
     sessionId: turn.value.sessionId,
     turnId: turn.value.id,
     text: turn.value.text,
     messages: runtime.messages,
     model: runtime.model,
-    dependencies: runtime.dependencies,
+    maxToolRounds: runtime.config.maxToolRounds,
+    dependencies: {
+      ...runtime.dependencies,
+      promotion: {
+        ...runtime.dependencies.promotion,
+        session,
+        now: new Date(),
+      },
+      handoff: {
+        ...runtime.dependencies.handoff,
+        turnId: turn.value.id,
+        proposalId: existing?.id ?? crypto.randomUUID(),
+      },
+    },
   });
   return turnResponse(result);
 }
@@ -52,7 +67,7 @@ export async function GET(
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
-  if (runtime.sessions.find(sessionId.value) === undefined) return missing();
+  if ((await runtime.sessions.find(sessionId.value)) === undefined) return missing();
 
   const messages = await runtime.messages.messagesForSession(sessionId.value);
   return Response.json({

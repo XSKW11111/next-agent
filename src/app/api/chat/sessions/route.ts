@@ -23,7 +23,7 @@ export async function POST(
   });
   if (!session.ok) throw new Error("session is invalid");
 
-  runtime.sessions.save(session.value);
+  await runtime.sessions.save(session.value);
   return Response.json({ id: session.value.id });
 }
 
