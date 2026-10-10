@@ -24,7 +24,7 @@ export async function postHandoff(
   if (!sessionId.success || !proposalId.success) {
     return Response.json({ code: "invalid" }, { status: 400 });
   }
-  if (runtime.sessions.find(sessionId.data) === undefined) {
+  if ((await runtime.sessions.find(sessionId.data)) === undefined) {
     return Response.json({ code: "missing" }, { status: 404 });
   }
 

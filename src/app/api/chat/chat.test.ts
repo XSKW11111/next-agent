@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import type { AgentConfig } from "@/infra/agent-config";
 import { parse, type Parsed } from "../../../domain/parse";
 import {
   sessionIdSchema,
@@ -226,6 +227,7 @@ function chatRuntime(ids: readonly string[], model: ScriptedModel = replyModel({
   const remaining = [...ids];
   const proposals = fakeProposalStore();
   return {
+    config: testConfig,
     sessions: memorySessions(),
     messages: memoryMessages(),
     proposals,
@@ -282,10 +284,10 @@ function messageRow(sequence: number, id: string, role: TurnMessage["role"], con
 function memorySessions(): SessionStore & { saved(): readonly Session[] } {
   const sessions = new Map<string, Session>();
   return {
-    save(session) {
+    async save(session) {
       sessions.set(session.id, session);
     },
-    find(id) {
+    async find(id) {
       return sessions.get(id);
     },
     saved() {
@@ -408,3 +410,16 @@ function parsed<T>(result: Parsed<T>): T {
   if (!result.ok) throw new Error("test fixture did not parse");
   return result.value;
 }
+
+const testConfig: AgentConfig = {
+  openRouterApiKey: "test-key",
+  model: "openai/gpt-4o",
+  supabaseUrl: "https://example.supabase.co",
+  supabaseServiceRoleKey: "test-service-role",
+  productMatchThreshold: 0.3,
+  maxProductCandidates: 5,
+  maxToolRounds: 6,
+  contextWindowTokens: 128000,
+  contextHardTokens: 120000,
+  debugToolDetails: false,
+};
