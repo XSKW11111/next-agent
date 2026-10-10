@@ -2,8 +2,11 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
+import dynamic from "next/dynamic";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Proposal } from "../domain/handoff";
+
+const HandoffCard = dynamic(() => import("./handoff-card").then((mod) => mod.HandoffCard), { ssr: false });
 
 const sessionKey = "next-agent-session-id";
 
@@ -74,13 +77,21 @@ function ChatThread({ sessionId }: { sessionId: string }) {
       <h1 style={{ fontSize: "1.25rem" }}>Support chat</h1>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", minHeight: "12rem" }}>
         {messages.length === 0 ? <p>Ask about an order, a product, or a person.</p> : null}
-        {messages.map((message) => (
-          <p key={message.id} style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-            {message.role === "user" ? "You" : "Assistant"}
-            {": "}
-            {textFrom(message)}
-          </p>
-        ))}
+        {messages.map((message) => {
+          const proposal = proposalOf(message);
+          return (
+            <div key={message.id}>
+              <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+                {message.role === "user" ? "You" : "Assistant"}
+                {": "}
+                {textFrom(message)}
+              </p>
+              {proposal === undefined ? null : (
+                <HandoffCard key={`${proposal.id}:${proposal.decision}`} proposal={proposal} sessionId={sessionId} />
+              )}
+            </div>
+          );
+        })}
       </div>
       <form
         style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}
@@ -104,6 +115,12 @@ function ChatThread({ sessionId }: { sessionId: string }) {
       </form>
     </main>
   );
+}
+
+function proposalOf(message: ChatMessage): Proposal | undefined {
+  const part = message.parts.find((candidate) => candidate.type === "data-proposal");
+  if (part === undefined || part.type !== "data-proposal") return undefined;
+  return part.data;
 }
 
 function textFrom(message: ChatMessage): string {

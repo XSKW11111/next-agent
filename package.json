@@ -12,6 +12,8 @@
     "lint:fix": "eslint --fix"
   },
   "dependencies": {
+    "@a2ui/react": "^0.13.0",
+    "@a2ui/web_core": "^0.13.0",
     "@ai-sdk/react": "^4.0.140",
     "@langchain/langgraph": "^1.4.21",
     "@supabase/supabase-js": "^2.117.3",
