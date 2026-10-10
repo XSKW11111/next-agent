@@ -11,6 +11,7 @@ import { sessionIdSchema, type SessionId } from "../../../domain/session";
 import { turnIdSchema, type TurnId } from "../../../domain/turn";
 
 export type ProposalStore = {
+  listProposals(sessionId: SessionId): readonly Proposal[];
   findProposalForTurn(sessionId: SessionId, turnId: TurnId): Proposal | undefined;
   findProposal(id: string): Proposal | undefined;
   saveProposal(proposal: Proposal): void;
