@@ -20,7 +20,7 @@ export function loadAgentConfig(
   const supabaseServiceRoleKey = requiredText(source, "SUPABASE_SERVICE_ROLE_KEY");
   const productMatchThreshold = requiredThreshold(source, "PRODUCT_MATCH_THRESHOLD");
   const maxProductCandidates = requiredPositiveInteger(source, "MAX_PRODUCT_CANDIDATES");
-  const maxToolRounds = requiredPositiveInteger(source, "MAX_TOOL_ROUNDS");
+  const maxToolRounds = requiredToolRounds(source, "MAX_TOOL_ROUNDS");
   const contextWindowTokens = requiredPositiveInteger(source, "CONTEXT_WINDOW_TOKENS");
   const contextHardTokens = requiredPositiveInteger(source, "CONTEXT_HARD_TOKENS");
   const debugToolDetails = requiredBoolean(source, "NEXT_AGENT_DEBUG_TOOL_DETAILS");
@@ -89,6 +89,17 @@ function requiredPositiveInteger(
     throw new Error(`${field} is invalid`);
   }
   return Number(value);
+}
+
+function requiredToolRounds(
+  source: Readonly<Record<string, string | undefined>>,
+  field: string,
+): number {
+  const value = requiredPositiveInteger(source, field);
+  if (value > 12) {
+    throw new Error(`${field} must be from 1 to 12`);
+  }
+  return value;
 }
 
 function requiredBoolean(

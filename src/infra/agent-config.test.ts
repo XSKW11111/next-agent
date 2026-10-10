@@ -44,6 +44,12 @@ test("CONTEXT_HARD_TOKENS must be below CONTEXT_WINDOW_TOKENS", () => {
   ).toThrow("CONTEXT_HARD_TOKENS must be less than CONTEXT_WINDOW_TOKENS");
 });
 
+test("MAX_TOOL_ROUNDS above 12 is rejected", () => {
+  expect(() => loadAgentConfig({ ...valid, MAX_TOOL_ROUNDS: "13" })).toThrow(
+    "MAX_TOOL_ROUNDS must be from 1 to 12",
+  );
+});
+
 test("an invalid SUPABASE_URL names the field and omits the value", () => {
   expect(() => loadAgentConfig({ ...valid, SUPABASE_URL: "not-a-url" })).toThrow(
     "SUPABASE_URL is invalid",
