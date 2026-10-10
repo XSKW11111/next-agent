@@ -290,6 +290,67 @@ test("an aborted deadline throws before tool work", async () => {
   expect(streaks.current()).toBe(1);
 });
 
+test("search uses the turn match threshold and candidate limit", async () => {
+  let toolContent = "";
+  const model: ScriptedModel = {
+    async complete(input) {
+      const tool = input.messages.find((message) => message.role === "tool");
+      if (tool?.role === "tool") {
+        toolContent = tool.content;
+        return { text: "Camp Mug is in stock." };
+      }
+      return {
+        text: "Searching.",
+        toolCalls: [
+          { id: "search-1", name: "search_products", args: { mode: "semantic", query: "mug" } },
+        ],
+      };
+    },
+  };
+
+  const result = await runSupportTurn({
+    model,
+    sessionId,
+    customerText: "Do you have a mug?",
+    productMatchThreshold: 0.5,
+    maxProductCandidates: 1,
+    dependencies: {
+      ...dependencies(streakStore(0)),
+      products: {
+        embedder: {
+          async embed() {
+            return [1];
+          },
+        },
+        catalog: {
+          async matchProducts() {
+            return [
+              { product: { name: "Camp Mug", stockLevel: 4 }, similarity: 0.91 },
+              { product: { name: "Spare Lid", stockLevel: 1 }, similarity: 0.4 },
+            ];
+          },
+          async listProducts() {
+            return [];
+          },
+        },
+      },
+    },
+  });
+
+  expect(JSON.parse(toolContent)).toEqual({
+    kind: "products_found",
+    mode: "semantic",
+    matchQuality: "strong",
+    absent: false,
+    filtersApplied: {},
+    catalogFields: ["name", "stockLevel"],
+    missingFields: ["price", "size", "color", "rating", "stock-keeping code"],
+    products: [{ name: "Camp Mug", stockLevel: 4 }],
+    alternatives: [{ name: "Spare Lid", stockLevel: 1 }],
+  });
+  expect(result.draft).toBe("Camp Mug is in stock.");
+});
+
 function dependencies(streaks: OrderStreakStore): SupportTurnDependencies {
   return {
     orders: {

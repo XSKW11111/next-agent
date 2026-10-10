@@ -177,6 +177,33 @@ test("a lost sequence claim retries once and stores the draft", async () => {
   ]);
 });
 
+test("maxToolRounds from the caller stops the model after that many completions", async () => {
+  const messages = memoryMessages();
+  const calls = { count: 0 };
+  const model: ScriptedModel = {
+    async complete() {
+      calls.count += 1;
+      return {
+        text: "Looking it up.",
+        toolCalls: [{ id: "lookup-1", name: "lookup_order", args: { email: "ada@example.com" } }],
+      };
+    },
+  };
+
+  const result = await submitTurn({
+    sessionId,
+    turnId,
+    text: "where is my order",
+    messages,
+    model,
+    dependencies: dependencies(),
+    maxToolRounds: 1,
+  });
+
+  expect(calls.count).toBe(1);
+  expect(result).toEqual({ kind: "reply", reply: "Looking it up." });
+});
+
 test("a second lost sequence claim stores nothing and skips the model", async () => {
   const messages = memoryMessages({ unchangedClaims: 2 });
   const calls = { count: 0 };

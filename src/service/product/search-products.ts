@@ -62,6 +62,11 @@ export type ProductSearchDependencies = {
   readonly embedder: Embedder;
 };
 
+export type ProductMatchLimits = {
+  readonly threshold?: number;
+  readonly candidateLimit?: number;
+};
+
 type FilterRejectReason =
   | "conflicting_inventory_bounds"
   | "reversed_bounds"
@@ -119,6 +124,7 @@ type ResolvedFilters =
 export async function searchProducts(
   input: unknown,
   dependencies: ProductSearchDependencies,
+  limits?: ProductMatchLimits,
 ): Promise<ProductSearchResult> {
   const request = requestSchema.safeParse(input);
   if (!request.success) {
@@ -132,7 +138,12 @@ export async function searchProducts(
 
   switch (request.data.mode) {
     case "semantic":
-      return searchSemantic(request.data.query, resolved.filters, dependencies);
+      return searchSemantic(
+        request.data.query,
+        resolved.filters,
+        dependencies,
+        resolvedLimits(limits),
+      );
     case "list":
       return searchList(resolved.filters, dependencies);
     default: {
@@ -146,10 +157,11 @@ async function searchSemantic(
   query: string,
   filters: AppliedFilters,
   dependencies: ProductSearchDependencies,
+  limits: { readonly threshold: number; readonly candidateLimit: number },
 ): Promise<ProductSearchResult> {
   const embedding = await dependencies.embedder.embed(query);
   const candidates = await dependencies.catalog.matchProducts({ embedding, filters });
-  return semanticResult(candidates, filters);
+  return semanticResult(candidates, filters, limits);
 }
 
 async function searchList(
@@ -171,14 +183,15 @@ async function searchList(
 function semanticResult(
   candidates: readonly CatalogCandidate[],
   filters: AppliedFilters,
+  limits: { readonly threshold: number; readonly candidateLimit: number },
 ): ProductSearchResult {
   const ranked = [...candidates].sort((left, right) => right.similarity - left.similarity);
   const strong = ranked
-    .filter((candidate) => candidate.similarity >= STRONG_SIMILARITY_MINIMUM)
-    .slice(0, SEMANTIC_RESULT_LIMIT)
+    .filter((candidate) => candidate.similarity >= limits.threshold)
+    .slice(0, limits.candidateLimit)
     .map((candidate) => candidate.product);
   const alternatives = ranked
-    .filter((candidate) => candidate.similarity < STRONG_SIMILARITY_MINIMUM)
+    .filter((candidate) => candidate.similarity < limits.threshold)
     .map((candidate) => candidate.product);
   const products = nonEmpty(strong);
   if (products !== undefined) {
@@ -253,6 +266,16 @@ function appliedFilters(
     ...(parsed.max_inventory === undefined ? {} : { maxInventory: parsed.max_inventory }),
     ...(parsed.sku === undefined ? {} : { sku: parsed.sku }),
     ...(parsed.name === undefined ? {} : { name: parsed.name }),
+  };
+}
+
+function resolvedLimits(limits: ProductMatchLimits | undefined): {
+  readonly threshold: number;
+  readonly candidateLimit: number;
+} {
+  return {
+    threshold: limits?.threshold ?? STRONG_SIMILARITY_MINIMUM,
+    candidateLimit: limits?.candidateLimit ?? SEMANTIC_RESULT_LIMIT,
   };
 }
 

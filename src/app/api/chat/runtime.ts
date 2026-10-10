@@ -19,6 +19,9 @@ export type ChatRuntime = {
   readonly model: ScriptedModel;
   readonly dependencies: SupportTurnDependencies;
   readonly newSessionId: () => string;
+  readonly maxToolRounds?: number;
+  readonly productMatchThreshold?: number;
+  readonly maxProductCandidates?: number;
 };
 
 let installedChatRuntime: ChatRuntime | undefined;

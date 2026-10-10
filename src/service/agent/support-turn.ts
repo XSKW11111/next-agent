@@ -133,6 +133,8 @@ export type SupportTurnInput = {
   readonly threadId?: string;
   readonly signal?: AbortSignal;
   readonly maxToolRounds?: number;
+  readonly productMatchThreshold?: number;
+  readonly maxProductCandidates?: number;
 };
 
 type HeldHandoff =
@@ -185,6 +187,8 @@ type ReadyTurn = {
   readonly sessionId: SessionId;
   readonly signal: AbortSignal | undefined;
   readonly maxToolRounds: number;
+  readonly productMatchThreshold: number | undefined;
+  readonly maxProductCandidates: number | undefined;
   readonly dependencies: SupportTurnDependencies;
 };
 
@@ -208,6 +212,8 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     sessionId,
     signal: input.signal,
     maxToolRounds,
+    productMatchThreshold: input.productMatchThreshold,
+    maxProductCandidates: input.maxProductCandidates,
     dependencies: input.dependencies,
   });
   const state = await graph.invoke(
@@ -344,7 +350,14 @@ async function runNamedTool(call: ModelToolCall, ready: ReadyTurn): Promise<unkn
     case "lookup_order":
       return runLookup(call.args, ready);
     case "search_products":
-      return searchProducts(call.args, ready.dependencies.products);
+      return searchProducts(call.args, ready.dependencies.products, {
+        ...(ready.productMatchThreshold === undefined
+          ? {}
+          : { threshold: ready.productMatchThreshold }),
+        ...(ready.maxProductCandidates === undefined
+          ? {}
+          : { candidateLimit: ready.maxProductCandidates }),
+      });
     case "claim_early_risers":
       return runClaim(call.args, ready);
     case "capture_handoff":

@@ -55,6 +55,40 @@ test("semantic search returns a strong match and a weaker alternative", async ()
   });
 });
 
+test("semantic search honors a caller threshold and candidate limit", async () => {
+  const result = await searchProducts(
+    { mode: "semantic", query: "mug" },
+    {
+      embedder: embedder(async () => [1]),
+      catalog: catalog({
+        async matchProducts() {
+          return [
+            { product: { name: "Camp Mug", stockLevel: 4 }, similarity: 0.91 },
+            { product: { name: "Spare Lid", stockLevel: 1 }, similarity: 0.4 },
+            { product: { name: "Weak Lantern", stockLevel: 2 }, similarity: 0.2 },
+          ];
+        },
+      }),
+    },
+    { threshold: 0.5, candidateLimit: 1 },
+  );
+
+  expect(result).toEqual({
+    kind: "products_found",
+    mode: "semantic",
+    matchQuality: "strong",
+    absent: false,
+    filtersApplied: {},
+    catalogFields,
+    missingFields,
+    products: [{ name: "Camp Mug", stockLevel: 4 }],
+    alternatives: [
+      { name: "Spare Lid", stockLevel: 1 },
+      { name: "Weak Lantern", stockLevel: 2 },
+    ],
+  });
+});
+
 test("semantic search returns a relaxed alternative below the strong floor", async () => {
   const result = await searchProducts(
     { mode: "semantic", query: "lantern" },
