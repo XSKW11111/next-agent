@@ -1,9 +1,10 @@
+import type { HandoffPart } from "../../domain/handoff";
 import { parseTurn, type Turn } from "../../domain/turn";
 import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "../agent/support-turn";
 import type { MessageStore, TurnMessage } from "./message-store";
 
 export type SubmitTurnResult =
-  | { readonly kind: "reply"; readonly reply: string }
+  | { readonly kind: "reply"; readonly reply: string; readonly handoff?: HandoffPart }
   | { readonly kind: "rejected" }
   | { readonly kind: "already_submitted" };
 
@@ -35,7 +36,7 @@ export async function submitTurn(input: SubmitTurnInput): Promise<SubmitTurnResu
   switch (recorded.kind) {
     case "saved":
       if (recorded.text !== turn.value.text) return { kind: "rejected" };
-      return { kind: "reply", reply: recorded.reply };
+      return replyResult(recorded.reply, input.dependencies, turn.value);
     case "submitted":
       return { kind: "already_submitted" };
     case "new":
@@ -75,7 +76,21 @@ async function saveNewTurn(
     content: completion.draft,
   });
 
-  return { kind: "reply", reply: completion.draft };
+  return replyResult(completion.draft, dependencies, turn);
+}
+
+function replyResult(
+  reply: string,
+  dependencies: SupportTurnDependencies,
+  turn: Turn,
+): SubmitTurnResult {
+  const proposal = dependencies.handoff.store.findProposalForTurn(turn.sessionId, turn.id);
+  if (proposal === undefined) return { kind: "reply", reply };
+  return {
+    kind: "reply",
+    reply,
+    handoff: { proposalId: proposal.id, decision: proposal.decision },
+  };
 }
 
 async function insertRow(

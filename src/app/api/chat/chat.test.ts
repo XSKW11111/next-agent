@@ -146,6 +146,53 @@ test("GET /api/chat/sessions/:id/messages returns the stored messages", async ()
       customerRow(1, turnId, "where is my order"),
       assistantRow(2, turnId, "On the way."),
     ],
+    proposals: [],
+  });
+});
+
+test("capture_handoff streams the proposal, and confirm stores that decision", async () => {
+  const runtime = await startedRuntime(handoffModel());
+  const sent = await sendMessage(
+    jsonRequest({ turnId, text: "I need a person at ada@example.com" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const stream = await readStream(sent);
+  const handoff = stream.chunks.find((chunk) => isRecord(chunk) && chunk.type === "data-handoff");
+  if (!isRecord(handoff) || typeof handoff.id !== "string") throw new Error("data-handoff was missing");
+
+  expect(sent.status).toBe(200);
+  expect(stream.text).toBe("A person can take this from here.");
+  expect(handoff).toEqual({
+    type: "data-handoff",
+    id: handoff.id,
+    data: { proposalId: handoff.id, decision: "pending" },
+  });
+  expect(handoff.id).not.toBe(proposalId);
+
+  const pending = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+  expect(await pending.json()).toEqual({
+    messages: [
+      customerRow(1, turnId, "I need a person at ada@example.com"),
+      assistantRow(2, turnId, "A person can take this from here."),
+    ],
+    proposals: [{ turnId, proposalId: handoff.id, decision: "pending" }],
+  });
+
+  const confirmed = await confirmProposal(
+    new Request("http://localhost/confirm", { method: "POST" }),
+    handoffContext(sessionId, handoff.id),
+    runtime,
+  );
+  expect(confirmed.status).toBe(200);
+
+  const later = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+  expect(await later.json()).toEqual({
+    messages: [
+      customerRow(1, turnId, "I need a person at ada@example.com"),
+      assistantRow(2, turnId, "A person can take this from here."),
+    ],
+    proposals: [{ turnId, proposalId: handoff.id, decision: "confirmed" }],
   });
 });
 
@@ -265,6 +312,45 @@ function replyModel(calls: { count: number }, text: string): ScriptedModel {
       return { text };
     },
   };
+}
+
+function handoffModel(): ScriptedModel {
+  return {
+    async complete({ messages }) {
+      const captured = messages.some((message) => message.role === "tool" && message.name === "capture_handoff");
+      if (captured) return { text: "A person can take this from here." };
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "route-handoff",
+            name: "capture_handoff",
+            args: {
+              contact_email: "ada@example.com",
+              reason: "The customer asked for a person",
+            },
+          },
+        ],
+      };
+    },
+  };
+}
+
+async function readStream(response: Response): Promise<{ text: string; chunks: unknown[] }> {
+  const body = await response.text();
+  const chunks: unknown[] = [];
+  let text = "";
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const payload = line.slice("data: ".length);
+    if (payload === "[DONE]") continue;
+    const chunk: unknown = JSON.parse(payload);
+    chunks.push(chunk);
+    if (!isRecord(chunk) || chunk.type !== "text-delta") continue;
+    if (typeof chunk.delta !== "string") throw new Error("text-delta was missing delta");
+    text += chunk.delta;
+  }
+  return { text, chunks };
 }
 
 function personInput() {

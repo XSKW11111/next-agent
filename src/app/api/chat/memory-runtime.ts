@@ -1,6 +1,6 @@
 import { parseSession, type Session, type SessionId, type UnmatchedOrderStreak } from "../../../domain/session";
 import type { Proposal, SupportCase } from "../../../domain/handoff";
-import type { ScriptedModel } from "../../../service/agent/support-turn";
+import type { ScriptedModel, ScriptedReply, SupportMessage } from "../../../service/agent/support-turn";
 import type { ProposalStore } from "../../../service/handoff/handoff";
 import type { OrderCatalog, OrderStreakStore } from "../../../service/order/lookup-order";
 import type { Catalog, Embedder } from "../../../service/product/search-products";
@@ -48,12 +48,89 @@ export function memoryChatRuntime(): ChatRuntime {
   };
 }
 
+const personWord = /\bperson\b/i;
+const emailAddress =
+  /[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+/i;
+
 function memoryModel(): ScriptedModel {
   return {
-    async complete() {
-      return { text: memoryReply };
+    async complete(input) {
+      return memoryCompletion(input.messages);
     },
   };
+}
+
+function memoryCompletion(messages: readonly SupportMessage[]): ScriptedReply {
+  const cue = memoryCue(messages);
+  switch (cue.kind) {
+    case "after-handoff":
+      return { text: "A person can take this from here." };
+    case "propose":
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "memory-handoff",
+            name: "capture_handoff",
+            args: {
+              contact_email: cue.email,
+              reason: "The customer asked for a person",
+            },
+          },
+        ],
+      };
+    case "reply":
+      return { text: memoryReply };
+    default: {
+      const unexpected: never = cue;
+      return unexpected;
+    }
+  }
+}
+
+type MemoryCue =
+  | { readonly kind: "after-handoff" }
+  | { readonly kind: "propose"; readonly email: string }
+  | { readonly kind: "reply" };
+
+function memoryCue(messages: readonly SupportMessage[]): MemoryCue {
+  if (sawHandoffResult(messages)) return { kind: "after-handoff" };
+  const text = latestUserText(messages);
+  const email = text === undefined ? undefined : contactEmail(text);
+  if (text !== undefined && personWord.test(text) && email !== undefined) {
+    return { kind: "propose", email };
+  }
+  return { kind: "reply" };
+}
+
+function sawHandoffResult(messages: readonly SupportMessage[]): boolean {
+  for (const message of messages) {
+    switch (message.role) {
+      case "tool":
+        if (message.name === "capture_handoff") return true;
+        break;
+      case "user":
+      case "assistant":
+        break;
+      default: {
+        const unexpected: never = message;
+        return unexpected;
+      }
+    }
+  }
+  return false;
+}
+
+function latestUserText(messages: readonly SupportMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") return message.content;
+  }
+  return undefined;
+}
+
+function contactEmail(text: string): string | undefined {
+  return emailAddress.exec(text)?.[0].toLowerCase();
 }
 
 function memorySessions(): SessionStore {

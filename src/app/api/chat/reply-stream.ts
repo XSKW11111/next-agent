@@ -1,18 +1,19 @@
 import { createUIMessageStream, createUIMessageStreamResponse, type UIMessageChunk } from "ai";
+import type { HandoffPart } from "../../../domain/handoff";
 
 const replyTextChunkLength = 16;
 const replyTextPartId = "reply";
 
-export function replyStreamResponse(reply: string): Response {
+export function replyStreamResponse(reply: string, handoff?: HandoffPart): Response {
   const stream = createUIMessageStream({
     execute({ writer }) {
-      for (const chunk of replyChunks(reply)) writer.write(chunk);
+      for (const chunk of replyChunks(reply, handoff)) writer.write(chunk);
     },
   });
   return createUIMessageStreamResponse({ stream });
 }
 
-function replyChunks(reply: string): readonly UIMessageChunk[] {
+function replyChunks(reply: string, handoff: HandoffPart | undefined): readonly UIMessageChunk[] {
   const chunks: UIMessageChunk[] = [
     { type: "start" },
     { type: "start-step" },
@@ -21,11 +22,11 @@ function replyChunks(reply: string): readonly UIMessageChunk[] {
   for (const delta of replyTextDeltas(reply)) {
     chunks.push({ type: "text-delta", id: replyTextPartId, delta });
   }
-  chunks.push(
-    { type: "text-end", id: replyTextPartId },
-    { type: "finish-step" },
-    { type: "finish" },
-  );
+  chunks.push({ type: "text-end", id: replyTextPartId });
+  if (handoff !== undefined) {
+    chunks.push({ type: "data-handoff", id: handoff.proposalId, data: handoff });
+  }
+  chunks.push({ type: "finish-step" }, { type: "finish" });
   return chunks;
 }
 

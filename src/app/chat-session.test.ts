@@ -106,6 +106,58 @@ test("history is ordered by sequence and spoken as user or assistant", () => {
   ]);
 });
 
+test("a proposal is attached only to the matching assistant row", () => {
+  const turnId = "22222222-2222-4222-8222-222222222222";
+  const otherTurnId = "44444444-4444-4444-8444-444444444444";
+  const proposalId = "33333333-3333-4333-8333-333333333333";
+
+  expect(
+    supportMessages(
+      [
+        { role: "customer", content: "I need a person", sequence: 1, turnId, sessionId },
+        { role: "assistant", content: "A person can take this from here.", sequence: 2, turnId, sessionId },
+        { role: "customer", content: "thanks", sequence: 3, turnId: otherTurnId, sessionId },
+        {
+          role: "assistant",
+          content: "Tell me the email on the order, or the product you want.",
+          sequence: 4,
+          turnId: otherTurnId,
+          sessionId,
+        },
+      ],
+      [{ turnId, proposalId, decision: "pending" }],
+    ),
+  ).toEqual([
+    {
+      id: `${turnId}:customer`,
+      role: "user",
+      parts: [{ type: "text", text: "I need a person" }],
+    },
+    {
+      id: `${turnId}:assistant`,
+      role: "assistant",
+      parts: [
+        { type: "text", text: "A person can take this from here." },
+        {
+          type: "data-handoff",
+          id: proposalId,
+          data: { proposalId, decision: "pending" },
+        },
+      ],
+    },
+    {
+      id: `${otherTurnId}:customer`,
+      role: "user",
+      parts: [{ type: "text", text: "thanks" }],
+    },
+    {
+      id: `${otherTurnId}:assistant`,
+      role: "assistant",
+      parts: [{ type: "text", text: "Tell me the email on the order, or the product you want." }],
+    },
+  ]);
+});
+
 function memoryStorage(initial: Record<string, string> = {}): Pick<Storage, "getItem" | "setItem"> {
   const values = new Map(Object.entries(initial));
   return {

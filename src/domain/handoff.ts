@@ -67,6 +67,13 @@ export const proposalSchema = z.discriminatedUnion("decision", [
 
 export type Proposal = z.infer<typeof proposalSchema>;
 
+export const handoffPartSchema = z.strictObject({
+  proposalId: z.uuid(),
+  decision: z.enum(["pending", "confirmed", "cancelled"]),
+});
+
+export type HandoffPart = z.infer<typeof handoffPartSchema>;
+
 export const caseStatusSchema = z.literal(["open", "closed", "resolved"]);
 
 export type CaseStatus = z.infer<typeof caseStatusSchema>;

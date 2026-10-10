@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { sessionIdSchema, type SessionId } from "../../../../../../domain/session";
-import { parseTurn } from "../../../../../../domain/turn";
+import { parseTurn, type TurnId } from "../../../../../../domain/turn";
+import type { SupportTurnDependencies } from "../../../../../../service/agent/support-turn";
+import type { TurnMessage } from "../../../../../../service/turn/message-store";
 import { submitTurn, type SubmitTurnResult } from "../../../../../../service/turn/submit-turn";
 import { replyStreamResponse } from "../../../reply-stream";
 import { currentChatRuntime, type ChatRuntime } from "../../../runtime";
@@ -41,7 +43,7 @@ export async function POST(
     text: turn.value.text,
     messages: runtime.messages,
     model: runtime.model,
-    dependencies: runtime.dependencies,
+    dependencies: dependenciesForTurn(runtime, turn.value.sessionId, turn.value.id),
   });
   return turnResponse(result);
 }
@@ -55,16 +57,56 @@ export async function GET(
   if (!sessionId.ok) return invalid();
   if (runtime.sessions.find(sessionId.value) === undefined) return missing();
 
-  const messages = await runtime.messages.messagesForSession(sessionId.value);
+  const messages = [...(await runtime.messages.messagesForSession(sessionId.value))].sort(
+    (left, right) => left.sequence - right.sequence,
+  );
   return Response.json({
-    messages: [...messages].sort((left, right) => left.sequence - right.sequence),
+    messages,
+    proposals: proposalsForSession(runtime, sessionId.value, messages),
   });
+}
+
+function dependenciesForTurn(
+  runtime: ChatRuntime,
+  sessionId: SessionId,
+  turnId: TurnId,
+): SupportTurnDependencies {
+  const existing = runtime.proposals.findProposalForTurn(sessionId, turnId);
+  return {
+    ...runtime.dependencies,
+    handoff: {
+      ...runtime.dependencies.handoff,
+      turnId,
+      proposalId: existing?.id ?? crypto.randomUUID(),
+    },
+  };
+}
+
+function proposalsForSession(
+  runtime: ChatRuntime,
+  sessionId: SessionId,
+  messages: readonly TurnMessage[],
+) {
+  const proposals = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    if (seen.has(message.turnId)) continue;
+    seen.add(message.turnId);
+    const proposal = runtime.proposals.findProposalForTurn(sessionId, message.turnId);
+    if (proposal === undefined) continue;
+    proposals.push({
+      turnId: proposal.turnId,
+      proposalId: proposal.id,
+      decision: proposal.decision,
+    });
+  }
+  return proposals;
 }
 
 function turnResponse(result: SubmitTurnResult): Response {
   switch (result.kind) {
     case "reply":
-      return replyStreamResponse(result.reply);
+      return replyStreamResponse(result.reply, result.handoff);
     case "rejected":
       return Response.json({ code: "rejected" }, { status: 409 });
     case "already_submitted":
