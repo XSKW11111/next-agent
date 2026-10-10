@@ -20,7 +20,11 @@ test("the support migration creates the session, message, proposal, and case tab
   expect(sql).toContain(
     "create unique index messages_session_id_turn_id_role_key on messages (session_id, turn_id, role) where turn_id is not null",
   );
-  expect(sql).not.toContain("active_operation_id");
+  expect(sql).toContain("active_operation_id");
+  expect(sql).toContain("active_until");
+  expect(sql).not.toContain("timezone");
+  expect(sql).not.toContain("contact_email");
+  expect(sql).toContain("default 0");
   expect(sql).toContain("alter table sessions enable row level security");
   expect(sql).toContain("alter table messages enable row level security");
   expect(sql).toContain("alter table support_handoffs enable row level security");
