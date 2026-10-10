@@ -4,20 +4,13 @@ import { handoffResultSchema, type HandoffResult } from "../../domain/handoff";
 import { parse } from "../../domain/parse";
 import {
   sessionIdSchema,
-  type Session,
   type SessionId,
   type UnmatchedOrderStreak,
 } from "../../domain/session";
 import { finalizeSupportAnswer } from "../answer/finalize-support-answer";
-import { captureHandoff, type ProposalStore } from "../handoff/handoff";
-import { lookupOrder, type OrderCatalog, type OrderStreakStore } from "../order/lookup-order";
-import { searchProducts, type ProductSearchDependencies } from "../product/search-products";
-import {
-  claimEarlyRisers,
-  type EarlyRisersCodeStore,
-} from "../promotion/claim-early-risers";
+import { runToolRound, type ToolCall, type ToolName } from "../tool/run-tool-round";
+import { runSupportTool, type SupportToolDependencies } from "../tool/support-tools";
 import { supportSystemPrompt } from "./prompts/system";
-import { runToolRound, type ToolCall, type ToolName } from "../tool-lanes/run-tool-round";
 
 const defaultMaxToolRounds = 6;
 
@@ -37,21 +30,6 @@ const toolCallSchema = z.strictObject({
 const replySchema = z.strictObject({
   text: z.string(),
   toolCalls: z.array(toolCallSchema).optional(),
-});
-
-const lookupArgsSchema = z.strictObject({
-  email: z.string(),
-  order_number: z.string().optional(),
-});
-
-const claimArgsSchema = z.strictObject({
-  request: z.string().trim().min(1),
-});
-
-const handoffArgsSchema = z.strictObject({
-  contact_email: z.string(),
-  reason: z.string(),
-  order_number: z.string().optional(),
 });
 
 const customerTextSchema = z.string().trim().min(1);
@@ -106,24 +84,7 @@ export type TurnCompletion = {
   readonly handoffDraft: HandoffDraft | undefined;
 };
 
-export type SupportTurnDependencies = {
-  readonly orders: {
-    readonly catalog: OrderCatalog;
-    readonly streaks: OrderStreakStore;
-  };
-  readonly products: ProductSearchDependencies;
-  readonly promotion: {
-    readonly session: Session;
-    readonly now: Date;
-    readonly store: EarlyRisersCodeStore;
-    readonly issueCode?: () => string;
-  };
-  readonly handoff: {
-    readonly store: ProposalStore;
-    readonly turnId: string;
-    readonly proposalId: string;
-  };
-};
+export type SupportTurnDependencies = SupportToolDependencies;
 
 export type SupportTurnInput = {
   readonly model: ScriptedModel;
@@ -335,79 +296,20 @@ function routeAfterTools(state: TurnChannels, ready: ReadyTurn): "agent" | typeo
   return "agent";
 }
 
-async function runCall(call: ModelToolCall, ready: ReadyTurn): Promise<unknown> {
-  throwIfAborted(ready.signal);
-  try {
-    return await runNamedTool(call, ready);
-  } catch (error) {
-    if (ready.signal?.aborted) throw error;
-    return unavailable(call.name);
-  }
-}
-
-async function runNamedTool(call: ModelToolCall, ready: ReadyTurn): Promise<unknown> {
-  switch (call.name) {
-    case "lookup_order":
-      return runLookup(call.args, ready);
-    case "search_products":
-      return searchProducts(call.args, ready.dependencies.products, {
-        ...(ready.productMatchThreshold === undefined
-          ? {}
-          : { threshold: ready.productMatchThreshold }),
-        ...(ready.maxProductCandidates === undefined
-          ? {}
-          : { candidateLimit: ready.maxProductCandidates }),
-      });
-    case "claim_early_risers":
-      return runClaim(call.args, ready);
-    case "capture_handoff":
-      return runCapture(call.args, ready);
-    default: {
-      const unexpected: never = call.name;
-      return unexpected;
-    }
-  }
-}
-
-async function runLookup(args: unknown, ready: ReadyTurn): Promise<unknown> {
-  const parsed = lookupArgsSchema.safeParse(args);
-  if (!parsed.success) return unavailable("lookup_order");
-  return lookupOrder(ready.dependencies.orders.catalog, ready.dependencies.orders.streaks, {
+function runCall(call: ModelToolCall, ready: ReadyTurn): Promise<unknown> {
+  return runSupportTool({
+    name: call.name,
+    args: call.args,
     sessionId: ready.sessionId,
-    email: parsed.data.email,
-    ...(parsed.data.order_number === undefined ? {} : { orderNumber: parsed.data.order_number }),
+    signal: ready.signal,
+    dependencies: ready.dependencies,
+    ...(ready.productMatchThreshold === undefined
+      ? {}
+      : { productMatchThreshold: ready.productMatchThreshold }),
+    ...(ready.maxProductCandidates === undefined
+      ? {}
+      : { maxProductCandidates: ready.maxProductCandidates }),
   });
-}
-
-async function runClaim(args: unknown, ready: ReadyTurn): Promise<unknown> {
-  const parsed = claimArgsSchema.safeParse(args);
-  if (!parsed.success) return unavailable("claim_early_risers");
-  const promotion = ready.dependencies.promotion;
-  return claimEarlyRisers({
-    session: promotion.session,
-    now: promotion.now,
-    store: promotion.store,
-    ...(promotion.issueCode === undefined ? {} : { issueCode: promotion.issueCode }),
-  });
-}
-
-function runCapture(args: unknown, ready: ReadyTurn): unknown {
-  const parsed = handoffArgsSchema.safeParse(args);
-  if (!parsed.success) return unavailable("capture_handoff");
-  const captured = captureHandoff(ready.dependencies.handoff.store, {
-    proposalId: ready.dependencies.handoff.proposalId,
-    sessionId: ready.sessionId,
-    turnId: ready.dependencies.handoff.turnId,
-    contactEmail: parsed.data.contact_email,
-    reason: parsed.data.reason,
-    ...(parsed.data.order_number === undefined ? {} : { orderNumber: parsed.data.order_number }),
-  });
-  if (!captured.ok) return unavailable("capture_handoff");
-  return captured.value;
-}
-
-function unavailable(tool: ToolName): { readonly kind: "service_unavailable"; readonly tool: ToolName } {
-  return { kind: "service_unavailable", tool };
 }
 
 function latestUnmatched(

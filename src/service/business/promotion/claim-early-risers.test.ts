@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { parsePromotionResult } from "../../domain/promotion";
-import { parseSession, type Session } from "../../domain/session";
+import { parsePromotionResult } from "../../../domain/promotion";
+import { parseSession, type Session } from "../../../domain/session";
 import {
   claimEarlyRisers,
   mintEarlyRisersCode,

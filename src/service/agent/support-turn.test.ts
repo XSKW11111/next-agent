@@ -9,10 +9,10 @@ import {
   type UnmatchedOrderStreak,
 } from "../../domain/session";
 import type { TurnId } from "../../domain/turn";
-import type { ProposalStore } from "../handoff/handoff";
-import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../order/lookup-order";
-import type { ProductSearchDependencies } from "../product/search-products";
-import type { EarlyRisersCodeStore } from "../promotion/claim-early-risers";
+import type { ProposalStore } from "../business/handoff/handoff";
+import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../business/order/lookup-order";
+import type { ProductSearchDependencies } from "../business/product/search-products";
+import type { EarlyRisersCodeStore } from "../business/promotion/claim-early-risers";
 import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "./support-turn";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";

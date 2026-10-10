@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Product } from "../../domain/product";
+import type { Product } from "../../../domain/product";
 
 const STRONG_SIMILARITY_MINIMUM = 0.3;
 const SEMANTIC_RESULT_LIMIT = 5;

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import type { PromotionResult } from "../../domain/promotion";
-import type { Session, SessionId } from "../../domain/session";
+import type { PromotionResult } from "../../../domain/promotion";
+import type { Session, SessionId } from "../../../domain/session";
 
 const earlyRisersWindow = "08:00-10:00" as const;
 

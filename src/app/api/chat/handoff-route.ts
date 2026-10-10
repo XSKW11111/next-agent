@@ -4,7 +4,7 @@ import {
   cancelHandoff,
   confirmHandoff,
   type HandoffDecision,
-} from "../../../service/handoff/handoff";
+} from "../../../service/business/handoff/handoff";
 import type { ChatRuntime } from "./runtime";
 
 type HandoffContext = {
