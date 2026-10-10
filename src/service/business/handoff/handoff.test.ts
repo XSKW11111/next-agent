@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
-import type { Proposal, SupportCase } from "../../domain/handoff";
-import type { SessionId } from "../../domain/session";
-import type { TurnId } from "../../domain/turn";
+import type { Proposal, SupportCase } from "../../../domain/handoff";
+import type { SessionId } from "../../../domain/session";
+import type { TurnId } from "../../../domain/turn";
 import {
   cancelHandoff,
   captureHandoff,

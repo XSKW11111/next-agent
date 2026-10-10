@@ -9,10 +9,10 @@ import {
   type UnmatchedOrderStreak,
 } from "../../domain/session";
 import type { TurnId } from "../../domain/turn";
-import type { ProposalStore } from "../handoff/handoff";
-import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../order/lookup-order";
-import type { ProductSearchDependencies } from "../product/search-products";
-import type { EarlyRisersCodeStore } from "../promotion/claim-early-risers";
+import type { ProposalStore } from "../business/handoff/handoff";
+import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../business/order/lookup-order";
+import type { ProductSearchDependencies } from "../business/product/search-products";
+import type { EarlyRisersCodeStore } from "../business/promotion/claim-early-risers";
 import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "./support-turn";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
@@ -288,6 +288,67 @@ test("an aborted deadline throws before tool work", async () => {
   ).rejects.toMatchObject({ name: "AbortError" });
   expect(calls).toBe(1);
   expect(streaks.current()).toBe(1);
+});
+
+test("search uses the turn match threshold and candidate limit", async () => {
+  let toolContent = "";
+  const model: ScriptedModel = {
+    async complete(input) {
+      const tool = input.messages.find((message) => message.role === "tool");
+      if (tool?.role === "tool") {
+        toolContent = tool.content;
+        return { text: "Camp Mug is in stock." };
+      }
+      return {
+        text: "Searching.",
+        toolCalls: [
+          { id: "search-1", name: "search_products", args: { mode: "semantic", query: "mug" } },
+        ],
+      };
+    },
+  };
+
+  const result = await runSupportTurn({
+    model,
+    sessionId,
+    customerText: "Do you have a mug?",
+    productMatchThreshold: 0.5,
+    maxProductCandidates: 1,
+    dependencies: {
+      ...dependencies(streakStore(0)),
+      products: {
+        embedder: {
+          async embed() {
+            return [1];
+          },
+        },
+        catalog: {
+          async matchProducts() {
+            return [
+              { product: { name: "Camp Mug", stockLevel: 4 }, similarity: 0.91 },
+              { product: { name: "Spare Lid", stockLevel: 1 }, similarity: 0.4 },
+            ];
+          },
+          async listProducts() {
+            return [];
+          },
+        },
+      },
+    },
+  });
+
+  expect(JSON.parse(toolContent)).toEqual({
+    kind: "products_found",
+    mode: "semantic",
+    matchQuality: "strong",
+    absent: false,
+    filtersApplied: {},
+    catalogFields: ["name", "stockLevel"],
+    missingFields: ["price", "size", "color", "rating", "stock-keeping code"],
+    products: [{ name: "Camp Mug", stockLevel: 4 }],
+    alternatives: [{ name: "Spare Lid", stockLevel: 1 }],
+  });
+  expect(result.draft).toBe("Camp Mug is in stock.");
 });
 
 function dependencies(streaks: OrderStreakStore): SupportTurnDependencies {

@@ -14,6 +14,9 @@ export type SubmitTurnInput = {
   readonly messages: MessageStore;
   readonly model: ScriptedModel;
   readonly dependencies: SupportTurnDependencies;
+  readonly maxToolRounds?: number;
+  readonly productMatchThreshold?: number;
+  readonly maxProductCandidates?: number;
 };
 
 type RecordedTurn =
@@ -39,7 +42,7 @@ export async function submitTurn(input: SubmitTurnInput): Promise<SubmitTurnResu
     case "submitted":
       return { kind: "already_submitted" };
     case "new":
-      return saveNewTurn(input.messages, input.model, input.dependencies, turn.value);
+      return saveNewTurn(input, turn.value);
     default: {
       const unexpected: never = recorded;
       return unexpected;
@@ -47,13 +50,8 @@ export async function submitTurn(input: SubmitTurnInput): Promise<SubmitTurnResu
   }
 }
 
-async function saveNewTurn(
-  messages: MessageStore,
-  model: ScriptedModel,
-  dependencies: SupportTurnDependencies,
-  turn: Turn,
-): Promise<SubmitTurnResult> {
-  await insertRow(messages, {
+async function saveNewTurn(input: SubmitTurnInput, turn: Turn): Promise<SubmitTurnResult> {
+  await insertRow(input.messages, {
     sessionId: turn.sessionId,
     turnId: turn.id,
     role: "customer",
@@ -61,14 +59,21 @@ async function saveNewTurn(
   });
 
   const completion = await runSupportTurn({
-    model,
+    model: input.model,
     sessionId: turn.sessionId,
     threadId: turn.sessionId,
     customerText: turn.text,
-    dependencies,
+    dependencies: input.dependencies,
+    ...(input.maxToolRounds === undefined ? {} : { maxToolRounds: input.maxToolRounds }),
+    ...(input.productMatchThreshold === undefined
+      ? {}
+      : { productMatchThreshold: input.productMatchThreshold }),
+    ...(input.maxProductCandidates === undefined
+      ? {}
+      : { maxProductCandidates: input.maxProductCandidates }),
   });
 
-  await insertRow(messages, {
+  await insertRow(input.messages, {
     sessionId: turn.sessionId,
     turnId: turn.id,
     role: "assistant",

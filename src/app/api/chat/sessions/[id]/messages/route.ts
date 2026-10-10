@@ -41,6 +41,13 @@ export async function POST(
     messages: runtime.messages,
     model: runtime.model,
     dependencies: runtime.dependencies,
+    ...(runtime.maxToolRounds === undefined ? {} : { maxToolRounds: runtime.maxToolRounds }),
+    ...(runtime.productMatchThreshold === undefined
+      ? {}
+      : { productMatchThreshold: runtime.productMatchThreshold }),
+    ...(runtime.maxProductCandidates === undefined
+      ? {}
+      : { maxProductCandidates: runtime.maxProductCandidates }),
   });
   return turnResponse(result);
 }
