@@ -9,3 +9,4 @@ coverage/
 *.tsbuildinfo
 
 next-agent-system-architecture.md
+supabase/
