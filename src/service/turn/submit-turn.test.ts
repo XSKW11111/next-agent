@@ -2,10 +2,10 @@ import { expect, test } from "vitest";
 import { parse, type Parsed } from "../../domain/parse";
 import { sessionIdSchema, type Session, type SessionId, type UnmatchedOrderStreak } from "../../domain/session";
 import { parseTurn } from "../../domain/turn";
-import type { ProposalStore } from "../handoff/handoff";
-import type { OrderCatalog, OrderStreakStore } from "../order/lookup-order";
-import type { ProductSearchDependencies } from "../product/search-products";
-import type { EarlyRisersCodeStore } from "../promotion/claim-early-risers";
+import type { ProposalStore } from "../business/handoff/handoff";
+import type { OrderCatalog, OrderStreakStore } from "../business/order/lookup-order";
+import type { ProductSearchDependencies } from "../business/product/search-products";
+import type { EarlyRisersCodeStore } from "../business/promotion/claim-early-risers";
 import type { ScriptedModel, SupportTurnDependencies } from "../agent/support-turn";
 import type { MessageStore, SequenceUpdate, TurnMessage } from "./message-store";
 import { submitTurn } from "./submit-turn";
@@ -175,6 +175,33 @@ test("a lost sequence claim retries once and stores the draft", async () => {
     customerRow(1, turnId, "where is my order"),
     assistantRow(2, turnId, "On the way."),
   ]);
+});
+
+test("maxToolRounds from the caller stops the model after that many completions", async () => {
+  const messages = memoryMessages();
+  const calls = { count: 0 };
+  const model: ScriptedModel = {
+    async complete() {
+      calls.count += 1;
+      return {
+        text: "Looking it up.",
+        toolCalls: [{ id: "lookup-1", name: "lookup_order", args: { email: "ada@example.com" } }],
+      };
+    },
+  };
+
+  const result = await submitTurn({
+    sessionId,
+    turnId,
+    text: "where is my order",
+    messages,
+    model,
+    dependencies: dependencies(),
+    maxToolRounds: 1,
+  });
+
+  expect(calls.count).toBe(1);
+  expect(result).toEqual({ kind: "reply", reply: "Looking it up." });
 });
 
 test("a second lost sequence claim stores nothing and skips the model", async () => {

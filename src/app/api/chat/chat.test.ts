@@ -9,10 +9,10 @@ import {
 } from "../../../domain/session";
 import { parseTurn } from "../../../domain/turn";
 import type { Proposal, SupportCase } from "../../../domain/handoff";
-import { captureHandoff, type ProposalStore } from "../../../service/handoff/handoff";
-import type { OrderCatalog, OrderStreakStore } from "../../../service/order/lookup-order";
-import type { ProductSearchDependencies } from "../../../service/product/search-products";
-import type { EarlyRisersCodeStore } from "../../../service/promotion/claim-early-risers";
+import { captureHandoff, type ProposalStore } from "../../../service/business/handoff/handoff";
+import type { OrderCatalog, OrderStreakStore } from "../../../service/business/order/lookup-order";
+import type { ProductSearchDependencies } from "../../../service/business/product/search-products";
+import type { EarlyRisersCodeStore } from "../../../service/business/promotion/claim-early-risers";
 import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
 import type { SequenceUpdate, TurnMessage } from "../../../service/turn/message-store";
 import { POST as createSession } from "./sessions/route";

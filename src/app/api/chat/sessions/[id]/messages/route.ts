@@ -42,7 +42,13 @@ export async function POST(
     text: turn.value.text,
     messages: runtime.messages,
     model: runtime.model,
-    maxToolRounds: runtime.config.maxToolRounds,
+    maxToolRounds: runtime.maxToolRounds ?? runtime.config.maxToolRounds,
+    ...(runtime.productMatchThreshold === undefined
+      ? {}
+      : { productMatchThreshold: runtime.productMatchThreshold }),
+    ...(runtime.maxProductCandidates === undefined
+      ? {}
+      : { maxProductCandidates: runtime.maxProductCandidates }),
     dependencies: {
       ...runtime.dependencies,
       promotion: {

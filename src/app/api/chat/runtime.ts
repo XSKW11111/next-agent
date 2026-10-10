@@ -2,7 +2,7 @@ import type { AgentConfig } from "@/infra/agent-config";
 import { liveChatRuntime } from "@/infra/live-runtime";
 import type { Session, SessionId } from "../../../domain/session";
 import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
-import type { ProposalStore } from "../../../service/handoff/handoff";
+import type { ProposalStore } from "../../../service/business/handoff/handoff";
 import type { MessageStore, TurnMessage } from "../../../service/turn/message-store";
 
 export type SessionStore = {
@@ -22,6 +22,9 @@ export type ChatRuntime = {
   readonly model: ScriptedModel;
   readonly dependencies: SupportTurnDependencies;
   readonly newSessionId: () => string;
+  readonly maxToolRounds?: number;
+  readonly productMatchThreshold?: number;
+  readonly maxProductCandidates?: number;
 };
 
 let installedChatRuntime: ChatRuntime | undefined;

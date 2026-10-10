@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseSession, sessionIdSchema, unmatchedOrderStreakSchema, type Session, type SessionId } from "@/domain/session";
 import { turnIdSchema } from "@/domain/turn";
 import type { MessageRole, MessageStore, SequenceUpdate, TurnMessage } from "@/service/turn/message-store";
-import type { OrderStreakStore, StreakRead, StreakWrite } from "@/service/order/lookup-order";
+import type { OrderStreakStore, StreakRead, StreakWrite } from "@/service/business/order/lookup-order";
 
 const sessionRowSchema = z.object({
   id: z.string(),

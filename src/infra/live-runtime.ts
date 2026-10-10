@@ -6,10 +6,10 @@ import { parseAgentConfig } from "@/infra/agent-config";
 import { openRouterModel } from "@/infra/openrouter-model";
 import { createAgentSupabase } from "@/infra/supabase";
 import { supabaseMessages, supabaseSessions, supabaseStreaks } from "@/infra/supabase-support";
-import type { OrderCatalog } from "@/service/order/lookup-order";
-import type { EarlyRisersCodeStore } from "@/service/promotion/claim-early-risers";
-import type { Catalog, Embedder } from "@/service/product/search-products";
-import type { ProposalStore } from "@/service/handoff/handoff";
+import type { ProposalStore } from "@/service/business/handoff/handoff";
+import type { OrderCatalog } from "@/service/business/order/lookup-order";
+import type { Catalog, Embedder } from "@/service/business/product/search-products";
+import type { EarlyRisersCodeStore } from "@/service/business/promotion/claim-early-risers";
 
 const placeholderSessionId = "00000000-0000-4000-8000-000000000000";
 

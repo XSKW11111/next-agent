@@ -5,10 +5,10 @@ import {
   type HandoffResult,
   type Proposal,
   type SupportCase,
-} from "../../domain/handoff";
-import type { Parsed } from "../../domain/parse";
-import { sessionIdSchema, type SessionId } from "../../domain/session";
-import { turnIdSchema, type TurnId } from "../../domain/turn";
+} from "../../../domain/handoff";
+import type { Parsed } from "../../../domain/parse";
+import { sessionIdSchema, type SessionId } from "../../../domain/session";
+import { turnIdSchema, type TurnId } from "../../../domain/turn";
 
 export type ProposalStore = {
   findProposalForTurn(sessionId: SessionId, turnId: TurnId): Proposal | undefined;
