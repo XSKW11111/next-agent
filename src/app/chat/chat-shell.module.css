@@ -1,0 +1,19 @@
+.shell {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 0.75rem;
+}
+
+@media (min-width: 40rem) {
+  .shell {
+    padding: 1.5rem;
+  }
+}
+
+@media (min-width: 64rem) {
+  .shell {
+    max-width: 40rem;
+    padding: 2rem 1.5rem;
+  }
+}

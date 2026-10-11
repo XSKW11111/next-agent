@@ -1,0 +1,6 @@
+.transcript {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.75rem;
+}

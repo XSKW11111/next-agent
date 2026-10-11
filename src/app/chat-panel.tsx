@@ -5,6 +5,11 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import dynamic from "next/dynamic";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Proposal } from "../domain/handoff";
+import { ChatCard } from "./chat/chat-card";
+import { ChatComposer } from "./chat/chat-composer";
+import { ChatHeading } from "./chat/chat-heading";
+import { ChatShell } from "./chat/chat-shell";
+import { ChatTranscript } from "./chat/chat-transcript";
 
 const HandoffCard = dynamic(() => import("./handoff-card").then((mod) => mod.HandoffCard), { ssr: false });
 
@@ -120,47 +125,31 @@ function ChatLayout({
   onSubmit?: () => void;
 }) {
   return (
-    <main style={{ maxWidth: "40rem", margin: "0 auto", fontFamily: "system-ui, sans-serif", padding: "1.5rem" }}>
-      <h1 style={{ fontSize: "1.25rem" }}>Support chat</h1>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", minHeight: "12rem" }}>
-        {notice === undefined ? null : <p>{notice}</p>}
-        {messages.length === 0 ? <p>Ask about an order, a product, or a person.</p> : null}
-        {messages.map((message) => {
-          const proposal = proposalOf(message);
-          return (
-            <div key={message.id}>
-              <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                {message.role === "user" ? "You" : "Assistant"}
-                {": "}
-                {textFrom(message)}
-              </p>
-              {proposal === undefined || sessionId === null ? null : (
-                <HandoffCard key={`${proposal.id}:${proposal.decision}`} proposal={proposal} sessionId={sessionId} />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <form
-        style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSubmit?.();
-        }}
-      >
-        <label style={{ flex: 1 }}>
-          Message
-          <input
-            value={input}
-            onChange={(event) => onInput?.(event.target.value)}
-            style={{ display: "block", width: "100%", marginTop: "0.25rem" }}
-          />
-        </label>
-        <button type="submit" disabled={!canSend}>
-          Send
-        </button>
-      </form>
-    </main>
+    <ChatShell>
+      <ChatCard>
+        <ChatHeading />
+        <ChatTranscript>
+          {notice === undefined ? null : <p className="text-sm text-muted">{notice}</p>}
+          {messages.length === 0 ? <p className="text-sm text-muted">Ask about an order, a product, or a person.</p> : null}
+          {messages.map((message) => {
+            const proposal = proposalOf(message);
+            return (
+              <div key={message.id}>
+                <p className="whitespace-pre-wrap text-sm">
+                  {message.role === "user" ? "You" : "Assistant"}
+                  {": "}
+                  {textFrom(message)}
+                </p>
+                {proposal === undefined || sessionId === null ? null : (
+                  <HandoffCard key={`${proposal.id}:${proposal.decision}`} proposal={proposal} sessionId={sessionId} />
+                )}
+              </div>
+            );
+          })}
+        </ChatTranscript>
+        <ChatComposer input={input} canSend={canSend} onInput={onInput} onSubmit={onSubmit} />
+      </ChatCard>
+    </ChatShell>
   );
 }
 
