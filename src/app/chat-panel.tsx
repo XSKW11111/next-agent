@@ -35,13 +35,21 @@ export function ChatPanel() {
     void startSession(setCreated, setFailed);
   }, [sessionId]);
 
-  if (failed) {
-    return <main>The chat session could not be started.</main>;
-  }
   if (sessionId === null) {
-    return <main>Starting chat.</main>;
+    return <CleanChat failed={failed} />;
   }
-  return <ChatThread sessionId={sessionId} />;
+  return <ChatThread key={sessionId} sessionId={sessionId} />;
+}
+
+function CleanChat({ failed }: { failed: boolean }) {
+  return (
+    <ChatLayout
+      messages={[]}
+      sessionId={null}
+      canSend={false}
+      notice={failed ? "The chat session could not be started." : undefined}
+    />
+  );
 }
 
 function ChatThread({ sessionId }: { sessionId: string }) {
@@ -56,6 +64,8 @@ function ChatThread({ sessionId }: { sessionId: string }) {
     }),
   });
   const [input, setInput] = useState("");
+  const [historyReady, setHistoryReady] = useState(false);
+  const canSend = historyReady && status !== "submitted" && status !== "streaming";
 
   useEffect(() => {
     let cancelled = false;
@@ -66,16 +76,54 @@ function ChatThread({ sessionId }: { sessionId: string }) {
         if (cancelled) return;
         setMessages(historyMessages(body));
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setHistoryReady(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [sessionId, setMessages]);
 
   return (
+    <ChatLayout
+      messages={messages}
+      sessionId={sessionId}
+      canSend={canSend}
+      input={input}
+      onInput={setInput}
+      onSubmit={() => {
+        const text = input.trim();
+        if (text === "" || !canSend) return;
+        setInput("");
+        void sendMessage({ text });
+      }}
+    />
+  );
+}
+
+function ChatLayout({
+  messages,
+  sessionId,
+  canSend,
+  notice,
+  input = "",
+  onInput,
+  onSubmit,
+}: {
+  messages: readonly ChatMessage[];
+  sessionId: string | null;
+  canSend: boolean;
+  notice?: string;
+  input?: string;
+  onInput?: (value: string) => void;
+  onSubmit?: () => void;
+}) {
+  return (
     <main style={{ maxWidth: "40rem", margin: "0 auto", fontFamily: "system-ui, sans-serif", padding: "1.5rem" }}>
       <h1 style={{ fontSize: "1.25rem" }}>Support chat</h1>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", minHeight: "12rem" }}>
+        {notice === undefined ? null : <p>{notice}</p>}
         {messages.length === 0 ? <p>Ask about an order, a product, or a person.</p> : null}
         {messages.map((message) => {
           const proposal = proposalOf(message);
@@ -86,7 +134,7 @@ function ChatThread({ sessionId }: { sessionId: string }) {
                 {": "}
                 {textFrom(message)}
               </p>
-              {proposal === undefined ? null : (
+              {proposal === undefined || sessionId === null ? null : (
                 <HandoffCard key={`${proposal.id}:${proposal.decision}`} proposal={proposal} sessionId={sessionId} />
               )}
             </div>
@@ -97,21 +145,20 @@ function ChatThread({ sessionId }: { sessionId: string }) {
         style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}
         onSubmit={(event) => {
           event.preventDefault();
-          const text = input.trim();
-          if (text === "" || status === "submitted" || status === "streaming") return;
-          setInput("");
-          void sendMessage({ text });
+          onSubmit?.();
         }}
       >
         <label style={{ flex: 1 }}>
           Message
           <input
             value={input}
-            onChange={(event) => setInput(event.currentTarget.value)}
+            onChange={(event) => onInput?.(event.target.value)}
             style={{ display: "block", width: "100%", marginTop: "0.25rem" }}
           />
         </label>
-        <button type="submit">Send</button>
+        <button type="submit" disabled={!canSend}>
+          Send
+        </button>
       </form>
     </main>
   );
