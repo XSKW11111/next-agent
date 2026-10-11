@@ -7,7 +7,6 @@ import type { OrderStreakStore, StreakRead, StreakWrite } from "@/service/busine
 
 const sessionRowSchema = z.object({
   id: z.string(),
-  timezone: z.string(),
   unmatched_order_count: z.number().int(),
   next_message_sequence: z.coerce.number().int().positive(),
 });
@@ -15,7 +14,7 @@ const sessionRowSchema = z.object({
 const messageRowSchema = z.object({
   session_id: z.string(),
   turn_id: z.string(),
-  role: z.enum(["customer", "assistant"]),
+  role: z.enum(["user", "assistant"]),
   content: z.string(),
   sequence: z.coerce.number().int().positive(),
 });
@@ -48,7 +47,6 @@ export function supabaseSessions(client: SupabaseClient): {
       const { error } = await table(client, "sessions").insert({
         id: session.id,
         source: "web",
-        timezone: timezoneName(session),
         next_message_sequence: 1,
         unmatched_order_count: session.unmatchedOrderStreak,
       });
@@ -56,7 +54,7 @@ export function supabaseSessions(client: SupabaseClient): {
     },
     async find(id) {
       const { data, error } = await table(client, "sessions")
-        .select("id, timezone, unmatched_order_count, next_message_sequence")
+        .select("id, unmatched_order_count, next_message_sequence")
         .eq("id", id)
         .maybeSingle();
       if (error) fail("session read failed", error.code);
@@ -96,7 +94,7 @@ export function supabaseMessages(
       const { error } = await table(client, "messages").insert({
         session_id: message.sessionId,
         sequence: message.sequence,
-        role: message.role,
+        role: storedRole(message.role),
         content: message.content,
         turn_id: message.turnId,
         turn_index: message.sequence,
@@ -154,7 +152,7 @@ function sessionFromRow(data: unknown): Session {
   if (!row.success) fail("session row is invalid");
   const session = parseSession({
     id: row.data.id,
-    localTimezone: timezoneFromName(row.data.timezone),
+    localTimezone: { kind: "unresolved" },
     unmatchedOrderStreak: row.data.unmatched_order_count,
   });
   if (!session.ok) fail("session row is invalid");
@@ -170,7 +168,7 @@ function messageFromRow(data: unknown): TurnMessage {
   return {
     sessionId: sessionId.data,
     turnId: turnId.data,
-    role: row.data.role satisfies MessageRole,
+    role: messageRole(row.data.role),
     content: row.data.content,
     sequence: row.data.sequence,
   };
@@ -181,23 +179,30 @@ function sequenceUpdate(data: unknown, expected: number): SequenceUpdate {
   return { kind: "updated", sequence: expected };
 }
 
-function timezoneName(session: Session): string {
-  switch (session.localTimezone.kind) {
-    case "resolved":
-      return session.localTimezone.name;
-    case "unresolved":
-      return "";
+function storedRole(role: MessageRole): "user" | "assistant" {
+  switch (role) {
+    case "customer":
+      return "user";
+    case "assistant":
+      return "assistant";
     default: {
-      const unreachable: never = session.localTimezone;
+      const unreachable: never = role;
       return unreachable;
     }
   }
 }
 
-function timezoneFromName(name: string): Session["localTimezone"] {
-  const trimmed = name.trim();
-  if (trimmed.length === 0) return { kind: "unresolved" };
-  return { kind: "resolved", name: trimmed };
+function messageRole(role: "user" | "assistant"): MessageRole {
+  switch (role) {
+    case "user":
+      return "customer";
+    case "assistant":
+      return "assistant";
+    default: {
+      const unreachable: never = role;
+      return unreachable;
+    }
+  }
 }
 
 function hasRow(data: unknown): boolean {
