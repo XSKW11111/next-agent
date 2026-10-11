@@ -1,3 +1,5 @@
+import { ChatPanel } from "./chat-panel";
+
 export default function Page() {
-  return <main>next-agent</main>;
+  return <ChatPanel />;
 }
