@@ -330,9 +330,6 @@ function dependencies(): SupportTurnDependencies {
     },
     handoff: {
       store: {
-        listProposals() {
-          return [];
-        },
         findProposalForTurn() {
           return undefined;
         },

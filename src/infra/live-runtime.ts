@@ -95,9 +95,6 @@ function memoryProposals(): ProposalStore {
   const proposalIdByTurn = new Map<string, string>();
   const cases = new Map<string, SupportCase>();
   return {
-    listProposals(sessionId) {
-      return [...proposals.values()].filter((proposal) => proposal.sessionId === sessionId);
-    },
     findProposalForTurn(sessionId, turnId) {
       const id = proposalIdByTurn.get(`${sessionId}\0${turnId}`);
       if (id === undefined) return undefined;

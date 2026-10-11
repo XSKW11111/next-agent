@@ -179,9 +179,6 @@ function fakeProposalStore(): ProposalStore & {
   const cases = new Map<string, SupportCase>();
 
   return {
-    listProposals(session: SessionId) {
-      return [...proposals.values()].filter((proposal) => proposal.sessionId === session);
-    },
     findProposalForTurn(session: SessionId, turn: TurnId) {
       const id = proposalIdByTurn.get(turnKey(session, turn));
       if (id === undefined) {
