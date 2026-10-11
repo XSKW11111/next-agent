@@ -84,9 +84,9 @@ test("the same turn id and the same text returns the saved reply", async () => {
   );
 
   expect(first.status).toBe(200);
-  expect(await first.json()).toEqual({ reply: "On the way." });
+  expect(await replyText(first)).toBe("On the way.");
   expect(second.status).toBe(200);
-  expect(await second.json()).toEqual({ reply: "On the way." });
+  expect(await replyText(second)).toBe("On the way.");
   expect(calls.count).toBe(1);
 });
 
@@ -147,6 +147,30 @@ test("GET /api/chat/sessions/:id/messages returns the stored messages", async ()
       customerRow(1, turnId, "where is my order"),
       assistantRow(2, turnId, "On the way."),
     ],
+    proposals: [],
+  });
+});
+
+test("a handoff turn streams the reply and the pending proposal", async () => {
+  const runtime = await startedRuntime(replyModel({ count: 0 }, "A person can help."));
+  captureHandoff(runtime.proposals, personInput());
+
+  const response = await sendMessage(
+    jsonRequest({ turnId, text: "I need a person" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+
+  expect(response.status).toBe(200);
+  expect(await replyText(response)).toBe("A person can help.");
+  expect(await proposalData(response)).toEqual({
+    decision: "pending",
+    id: proposalId,
+    sessionId,
+    turnId,
+    contactEmail: "person@example.com",
+    reason: "I need a person",
+    orderNumber: "#AB12",
   });
 });
 
@@ -193,6 +217,38 @@ test("cancel creates no case and a later confirm leaves that decision", async ()
   expect(await later.json()).toEqual({ decision: "cancelled" });
   expect(runtime.proposals.cases()).toEqual([]);
 });
+
+async function replyText(response: Response): Promise<string> {
+  const events = await streamEvents(response.clone());
+  return events
+    .filter((event) => event.type === "text-delta")
+    .map((event) => event.delta ?? "")
+    .join("");
+}
+
+async function proposalData(response: Response): Promise<unknown> {
+  const events = await streamEvents(response.clone());
+  return events.find((event) => event.type === "data-proposal")?.data;
+}
+
+async function streamEvents(response: Response): Promise<Array<{ type: string; delta?: string; data?: unknown }>> {
+  const body = await response.text();
+  const events: Array<{ type: string; delta?: string; data?: unknown }> = [];
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const payload = line.slice("data: ".length);
+    if (payload === "[DONE]") continue;
+    const parsed: unknown = JSON.parse(payload);
+    if (typeof parsed !== "object" || parsed === null || !("type" in parsed)) continue;
+    if (typeof parsed.type !== "string") continue;
+    events.push({
+      type: parsed.type,
+      ...("delta" in parsed && typeof parsed.delta === "string" ? { delta: parsed.delta } : {}),
+      ...("data" in parsed ? { data: parsed.data } : {}),
+    });
+  }
+  return events;
+}
 
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/chat", {
@@ -329,6 +385,9 @@ function fakeProposalStore(): ProposalStore & { cases(): SupportCase[] } {
   const proposalIdByTurn = new Map<string, string>();
   const cases = new Map<string, SupportCase>();
   return {
+    listProposals(session) {
+      return [...proposals.values()].filter((proposal) => proposal.sessionId === session);
+    },
     findProposalForTurn(session, turn) {
       const id = proposalIdByTurn.get(`${session}\0${turn}`);
       if (id === undefined) return undefined;
