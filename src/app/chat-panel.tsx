@@ -3,13 +3,14 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import dynamic from "next/dynamic";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Proposal } from "../domain/handoff";
 import { ChatCard } from "./chat/chat-card";
 import { ChatComposer } from "./chat/chat-composer";
 import { ChatHeading } from "./chat/chat-heading";
 import { ChatShell } from "./chat/chat-shell";
 import { ChatTranscript } from "./chat/chat-transcript";
+import { sendAllowed } from "./chat/send-allowed";
 
 const HandoffCard = dynamic(() => import("./handoff-card").then((mod) => mod.HandoffCard), { ssr: false });
 
@@ -33,7 +34,11 @@ export function ChatPanel() {
   const stored = useSyncExternalStore(subscribeSession, readSession, () => null);
   const [created, setCreated] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [queued, setQueued] = useState<string | null>(null);
+  const sentQueued = useRef(false);
   const sessionId = stored ?? created;
+  const restoreHistory = stored !== null;
 
   useEffect(() => {
     if (sessionId !== null) return;
@@ -41,23 +46,75 @@ export function ChatPanel() {
   }, [sessionId]);
 
   if (sessionId === null) {
-    return <CleanChat failed={failed} />;
+    return (
+      <CleanChat
+        failed={failed}
+        draft={draft}
+        queued={queued}
+        onDraft={setDraft}
+        onQueue={setQueued}
+      />
+    );
   }
-  return <ChatThread key={sessionId} sessionId={sessionId} />;
+  return (
+    <ChatThread
+      key={sessionId}
+      sessionId={sessionId}
+      restoreHistory={restoreHistory}
+      draft={draft}
+      queued={queued}
+      sentQueued={sentQueued}
+    />
+  );
 }
 
-function CleanChat({ failed }: { failed: boolean }) {
+function CleanChat({
+  failed,
+  draft,
+  queued,
+  onDraft,
+  onQueue,
+}: {
+  failed: boolean;
+  draft: string;
+  queued: string | null;
+  onDraft: (value: string) => void;
+  onQueue: (value: string) => void;
+}) {
+  const canSend =
+    queued === null &&
+    sendAllowed({ failed, restoreHistory: false, historyReady: false, status: "ready" });
   return (
     <ChatLayout
-      messages={[]}
+      messages={queued === null ? [] : [pendingMessage(queued)]}
       sessionId={null}
-      canSend={false}
+      canSend={canSend}
+      input={queued ?? draft}
+      onInput={queued === null ? onDraft : undefined}
+      onSubmit={() => {
+        const text = draft.trim();
+        if (text === "" || !canSend) return;
+        onQueue(text);
+        onDraft("");
+      }}
       notice={failed ? "The chat session could not be started." : undefined}
     />
   );
 }
 
-function ChatThread({ sessionId }: { sessionId: string }) {
+function ChatThread({
+  sessionId,
+  restoreHistory,
+  draft,
+  queued,
+  sentQueued,
+}: {
+  sessionId: string;
+  restoreHistory: boolean;
+  draft: string;
+  queued: string | null;
+  sentQueued: { current: boolean };
+}) {
   const { messages, sendMessage, setMessages, status } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({
       api: `/api/chat/sessions/${sessionId}/messages`,
@@ -68,11 +125,12 @@ function ChatThread({ sessionId }: { sessionId: string }) {
       },
     }),
   });
-  const [input, setInput] = useState("");
-  const [historyReady, setHistoryReady] = useState(false);
-  const canSend = historyReady && status !== "submitted" && status !== "streaming";
+  const [input, setInput] = useState(draft);
+  const [historyReady, setHistoryReady] = useState(!restoreHistory);
+  const canSend = sendAllowed({ failed: false, restoreHistory, historyReady, status });
 
   useEffect(() => {
+    if (!restoreHistory) return;
     let cancelled = false;
     void fetch(`/api/chat/sessions/${sessionId}/messages`)
       .then(async (response) => {
@@ -88,11 +146,17 @@ function ChatThread({ sessionId }: { sessionId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, setMessages]);
+  }, [restoreHistory, sessionId, setMessages]);
+
+  useEffect(() => {
+    if (queued === null || !canSend || sentQueued.current) return;
+    sentQueued.current = true;
+    void sendMessage({ text: queued });
+  }, [queued, canSend, sendMessage, sentQueued]);
 
   return (
     <ChatLayout
-      messages={messages}
+      messages={messages.length === 0 && queued !== null ? [pendingMessage(queued)] : messages}
       sessionId={sessionId}
       canSend={canSend}
       input={input}
@@ -159,6 +223,10 @@ function proposalOf(message: ChatMessage): Proposal | undefined {
   return part.data;
 }
 
+function pendingMessage(text: string): ChatMessage {
+  return { id: "pending", role: "user", parts: [{ type: "text", text }] };
+}
+
 function textFrom(message: ChatMessage): string {
   return message.parts
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -195,21 +263,25 @@ async function startSession(
   setSessionId: (sessionId: string) => void,
   setFailed: (failed: boolean) => void,
 ): Promise<void> {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const response = await fetch("/api/chat/sessions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ timezone }),
-  });
-  if (!response.ok) {
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const response = await fetch("/api/chat/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ timezone }),
+    });
+    if (!response.ok) {
+      setFailed(true);
+      return;
+    }
+    const body = (await response.json()) as { id?: unknown };
+    if (typeof body.id !== "string") {
+      setFailed(true);
+      return;
+    }
+    sessionStorage.setItem(sessionKey, body.id);
+    setSessionId(body.id);
+  } catch {
     setFailed(true);
-    return;
   }
-  const body = (await response.json()) as { id?: unknown };
-  if (typeof body.id !== "string") {
-    setFailed(true);
-    return;
-  }
-  sessionStorage.setItem(sessionKey, body.id);
-  setSessionId(body.id);
 }
