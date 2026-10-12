@@ -4,6 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import type { Proposal } from "../domain/handoff";
 import { ChatCard } from "./chat/chat-card";
 import { ChatComposer } from "./chat/chat-composer";
@@ -197,15 +198,23 @@ function ChatLayout({
           {messages.length === 0 ? <p className="text-sm text-muted">Ask about an order, a product, or a person.</p> : null}
           {messages.map((message) => {
             const proposal = proposalOf(message);
+            const align = message.role === "user" ? "end" : "start";
             return (
-              <div key={message.id}>
-                <p className="whitespace-pre-wrap text-sm">
-                  {message.role === "user" ? "You" : "Assistant"}
-                  {": "}
-                  {textFrom(message)}
-                </p>
+              <div key={message.id} className="flex w-full flex-col gap-2">
+                <Bubble align={align} variant={align === "end" ? "default" : "outline"}>
+                  <BubbleContent className="whitespace-pre-wrap">
+                    <span className="sr-only">{align === "end" ? "You" : "Assistant"}: </span>
+                    {textFrom(message)}
+                  </BubbleContent>
+                </Bubble>
                 {proposal === undefined || sessionId === null ? null : (
-                  <HandoffCard key={`${proposal.id}:${proposal.decision}`} proposal={proposal} sessionId={sessionId} />
+                  <div className="w-full max-w-[80%] self-start">
+                    <HandoffCard
+                      key={`${proposal.id}:${proposal.decision}`}
+                      proposal={proposal}
+                      sessionId={sessionId}
+                    />
+                  </div>
                 )}
               </div>
             );
