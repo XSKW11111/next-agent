@@ -4,7 +4,7 @@
 
 This document defines language-agnostic coding guidelines for people and agents working in this repository. It applies when planning, implementing, reviewing, or testing code changes.
 
-Language-specific tools and project-specific architecture belong in the relevant project documentation. Those rules may strengthen this guide. They may override a **Should** rule when the reason is documented, but they must not silently override a **Must** rule.
+Language-specific tools and project-specific architecture belong in the relevant project documentation. Those rules may strengthen this guide. They may override a **Should** rule when the reason is documented, but they must not silently override a **Must** rule. The TypeScript extension is [TYPESCRIPT_STYLE.md](TYPESCRIPT_STYLE.md).
 
 The terms in this document have these meanings:
 
@@ -263,8 +263,6 @@ restore results to caller-visible request order
 
 ## Project-Specific Rules and Exceptions
 
+- [TYPESCRIPT_STYLE.md](TYPESCRIPT_STYLE.md) is the TypeScript extension of this guide. Read it before a TypeScript or presentation change.
 - Project and language-specific documentation may add stricter rules and concrete tools.
-- A project-specific rule may override a **Should** guideline when it explains why.
-- A **Must** rule may not be overridden silently.
-- A necessary exception to a **Must** rule must document the reason, risk, scope, and verification.
 - When rules conflict, follow the more specific rule unless doing so would silently weaken a **Must** requirement.

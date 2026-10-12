@@ -9,3 +9,7 @@ coverage/
 *.tsbuildinfo
 
 next-agent-system-architecture.md
+
+.cursor/
+.agents/
+docs/

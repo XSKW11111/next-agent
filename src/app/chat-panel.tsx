@@ -3,8 +3,15 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import dynamic from "next/dynamic";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import type { Proposal } from "../domain/handoff";
+import { ChatCard } from "./chat/chat-card";
+import { ChatComposer } from "./chat/chat-composer";
+import { ChatHeading } from "./chat/chat-heading";
+import { ChatShell } from "./chat/chat-shell";
+import { ChatTranscript } from "./chat/chat-transcript";
+import { sendAllowed } from "./chat/send-allowed";
 
 const HandoffCard = dynamic(() => import("./handoff-card").then((mod) => mod.HandoffCard), { ssr: false });
 
@@ -28,23 +35,87 @@ export function ChatPanel() {
   const stored = useSyncExternalStore(subscribeSession, readSession, () => null);
   const [created, setCreated] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [queued, setQueued] = useState<string | null>(null);
+  const sentQueued = useRef(false);
   const sessionId = stored ?? created;
+  const restoreHistory = stored !== null;
 
   useEffect(() => {
     if (sessionId !== null) return;
     void startSession(setCreated, setFailed);
   }, [sessionId]);
 
-  if (failed) {
-    return <main>The chat session could not be started.</main>;
-  }
   if (sessionId === null) {
-    return <main>Starting chat.</main>;
+    return (
+      <CleanChat
+        failed={failed}
+        draft={draft}
+        queued={queued}
+        onDraft={setDraft}
+        onQueue={setQueued}
+      />
+    );
   }
-  return <ChatThread sessionId={sessionId} />;
+  return (
+    <ChatThread
+      key={sessionId}
+      sessionId={sessionId}
+      restoreHistory={restoreHistory}
+      draft={draft}
+      queued={queued}
+      sentQueued={sentQueued}
+    />
+  );
 }
 
-function ChatThread({ sessionId }: { sessionId: string }) {
+function CleanChat({
+  failed,
+  draft,
+  queued,
+  onDraft,
+  onQueue,
+}: {
+  failed: boolean;
+  draft: string;
+  queued: string | null;
+  onDraft: (value: string) => void;
+  onQueue: (value: string) => void;
+}) {
+  const canSend =
+    queued === null &&
+    sendAllowed({ failed, restoreHistory: false, historyReady: false, status: "ready" });
+  return (
+    <ChatLayout
+      messages={queued === null ? [] : [pendingMessage(queued)]}
+      sessionId={null}
+      canSend={canSend}
+      input={queued ?? draft}
+      onInput={queued === null ? onDraft : undefined}
+      onSubmit={() => {
+        const text = draft.trim();
+        if (text === "" || !canSend) return;
+        onQueue(text);
+        onDraft("");
+      }}
+      notice={failed ? "The chat session could not be started." : undefined}
+    />
+  );
+}
+
+function ChatThread({
+  sessionId,
+  restoreHistory,
+  draft,
+  queued,
+  sentQueued,
+}: {
+  sessionId: string;
+  restoreHistory: boolean;
+  draft: string;
+  queued: string | null;
+  sentQueued: { current: boolean };
+}) {
   const { messages, sendMessage, setMessages, status } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({
       api: `/api/chat/sessions/${sessionId}/messages`,
@@ -55,9 +126,12 @@ function ChatThread({ sessionId }: { sessionId: string }) {
       },
     }),
   });
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(draft);
+  const [historyReady, setHistoryReady] = useState(!restoreHistory);
+  const canSend = sendAllowed({ failed: false, restoreHistory, historyReady, status });
 
   useEffect(() => {
+    if (!restoreHistory) return;
     let cancelled = false;
     void fetch(`/api/chat/sessions/${sessionId}/messages`)
       .then(async (response) => {
@@ -66,54 +140,89 @@ function ChatThread({ sessionId }: { sessionId: string }) {
         if (cancelled) return;
         setMessages(historyMessages(body));
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setHistoryReady(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [sessionId, setMessages]);
+  }, [restoreHistory, sessionId, setMessages]);
+
+  useEffect(() => {
+    if (queued === null || !canSend || sentQueued.current) return;
+    sentQueued.current = true;
+    void sendMessage({ text: queued });
+  }, [queued, canSend, sendMessage, sentQueued]);
 
   return (
-    <main style={{ maxWidth: "40rem", margin: "0 auto", fontFamily: "system-ui, sans-serif", padding: "1.5rem" }}>
-      <h1 style={{ fontSize: "1.25rem" }}>Support chat</h1>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", minHeight: "12rem" }}>
-        {messages.length === 0 ? <p>Ask about an order, a product, or a person.</p> : null}
-        {messages.map((message) => {
-          const proposal = proposalOf(message);
-          return (
-            <div key={message.id}>
-              <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                {message.role === "user" ? "You" : "Assistant"}
-                {": "}
-                {textFrom(message)}
-              </p>
-              {proposal === undefined ? null : (
-                <HandoffCard key={`${proposal.id}:${proposal.decision}`} proposal={proposal} sessionId={sessionId} />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <form
-        style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}
-        onSubmit={(event) => {
-          event.preventDefault();
-          const text = input.trim();
-          if (text === "" || status === "submitted" || status === "streaming") return;
-          setInput("");
-          void sendMessage({ text });
-        }}
-      >
-        <label style={{ flex: 1 }}>
-          Message
-          <input
-            value={input}
-            onChange={(event) => setInput(event.currentTarget.value)}
-            style={{ display: "block", width: "100%", marginTop: "0.25rem" }}
-          />
-        </label>
-        <button type="submit">Send</button>
-      </form>
-    </main>
+    <ChatLayout
+      messages={messages.length === 0 && queued !== null ? [pendingMessage(queued)] : messages}
+      sessionId={sessionId}
+      canSend={canSend}
+      input={input}
+      onInput={setInput}
+      onSubmit={() => {
+        const text = input.trim();
+        if (text === "" || !canSend) return;
+        setInput("");
+        void sendMessage({ text });
+      }}
+    />
+  );
+}
+
+function ChatLayout({
+  messages,
+  sessionId,
+  canSend,
+  notice,
+  input = "",
+  onInput,
+  onSubmit,
+}: {
+  messages: readonly ChatMessage[];
+  sessionId: string | null;
+  canSend: boolean;
+  notice?: string;
+  input?: string;
+  onInput?: (value: string) => void;
+  onSubmit?: () => void;
+}) {
+  return (
+    <ChatShell>
+      <ChatCard>
+        <ChatHeading />
+        <ChatTranscript>
+          {notice === undefined ? null : <p className="text-sm text-muted">{notice}</p>}
+          {messages.length === 0 ? <p className="text-sm text-muted">Ask about an order, a product, or a person.</p> : null}
+          {messages.map((message) => {
+            const proposal = proposalOf(message);
+            const align = message.role === "user" ? "end" : "start";
+            return (
+              <div key={message.id} className="flex w-full flex-col gap-2">
+                <Bubble align={align} variant={align === "end" ? "default" : "outline"}>
+                  <BubbleContent className="whitespace-pre-wrap">
+                    <span className="sr-only">{align === "end" ? "You" : "Assistant"}: </span>
+                    {textFrom(message)}
+                  </BubbleContent>
+                </Bubble>
+                {proposal === undefined || sessionId === null ? null : (
+                  <div className="w-full max-w-[80%] self-start">
+                    <HandoffCard
+                      key={`${proposal.id}:${proposal.decision}`}
+                      proposal={proposal}
+                      sessionId={sessionId}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </ChatTranscript>
+        <ChatComposer input={input} canSend={canSend} onInput={onInput} onSubmit={onSubmit} />
+      </ChatCard>
+    </ChatShell>
   );
 }
 
@@ -121,6 +230,10 @@ function proposalOf(message: ChatMessage): Proposal | undefined {
   const part = message.parts.find((candidate) => candidate.type === "data-proposal");
   if (part === undefined || part.type !== "data-proposal") return undefined;
   return part.data;
+}
+
+function pendingMessage(text: string): ChatMessage {
+  return { id: "pending", role: "user", parts: [{ type: "text", text }] };
 }
 
 function textFrom(message: ChatMessage): string {
@@ -159,21 +272,25 @@ async function startSession(
   setSessionId: (sessionId: string) => void,
   setFailed: (failed: boolean) => void,
 ): Promise<void> {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const response = await fetch("/api/chat/sessions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ timezone }),
-  });
-  if (!response.ok) {
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const response = await fetch("/api/chat/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ timezone }),
+    });
+    if (!response.ok) {
+      setFailed(true);
+      return;
+    }
+    const body = (await response.json()) as { id?: unknown };
+    if (typeof body.id !== "string") {
+      setFailed(true);
+      return;
+    }
+    sessionStorage.setItem(sessionKey, body.id);
+    setSessionId(body.id);
+  } catch {
     setFailed(true);
-    return;
   }
-  const body = (await response.json()) as { id?: unknown };
-  if (typeof body.id !== "string") {
-    setFailed(true);
-    return;
-  }
-  sessionStorage.setItem(sessionKey, body.id);
-  setSessionId(body.id);
 }

@@ -3,13 +3,11 @@ import type { ChatRuntime } from "@/app/api/chat/runtime";
 import { parseSession, type Session } from "@/domain/session";
 import type { Proposal, SupportCase } from "@/domain/handoff";
 import { parseAgentConfig } from "@/infra/agent-config";
-import { openRouterModel } from "@/infra/openrouter-model";
+import { openRouterModel } from "@/infra/open-router-model";
 import { createAgentSupabase } from "@/infra/supabase";
+import { openRouterEmbedder, supabaseEarlyRisers, supabaseOrderCatalog, supabaseProductCatalog } from "@/infra/supabase-catalog";
 import { supabaseMessages, supabaseSessions, supabaseStreaks } from "@/infra/supabase-support";
 import type { ProposalStore } from "@/service/business/handoff/handoff";
-import type { OrderCatalog } from "@/service/business/order/lookup-order";
-import type { Catalog, Embedder } from "@/service/business/product/search-products";
-import type { EarlyRisersCodeStore } from "@/service/business/promotion/claim-early-risers";
 
 const placeholderSessionId = "00000000-0000-4000-8000-000000000000";
 
@@ -28,20 +26,20 @@ export function liveChatRuntime(
     sessions: supabaseSessions(client),
     messages: supabaseMessages(client),
     proposals,
-    model: openRouterModel(parsed.value, fetchImpl),
+    model: openRouterModel(parsed.value, fetchImpl ?? fetch),
     dependencies: {
       orders: {
-        catalog: unavailableOrders,
+        catalog: supabaseOrderCatalog(client),
         streaks: supabaseStreaks(client),
       },
       products: {
-        catalog: unavailableProducts,
-        embedder: unavailableEmbedder,
+        catalog: supabaseProductCatalog(client),
+        embedder: openRouterEmbedder(parsed.value.openRouterApiKey, fetchImpl),
       },
       promotion: {
         session: placeholderSession(),
         now: new Date(),
-        store: unavailablePromotion,
+        store: supabaseEarlyRisers(client),
       },
       handoff: {
         store: proposals,
@@ -52,33 +50,6 @@ export function liveChatRuntime(
     newSessionId: randomUUID,
   };
 }
-
-const unavailableOrders: OrderCatalog = {
-  async listOrdersForEmail() {
-    return { kind: "unavailable" };
-  },
-};
-
-const unavailableProducts: Catalog = {
-  async matchProducts() {
-    throw new Error("product catalog is not configured");
-  },
-  async listProducts() {
-    throw new Error("product catalog is not configured");
-  },
-};
-
-const unavailableEmbedder: Embedder = {
-  async embed() {
-    throw new Error("product catalog is not configured");
-  },
-};
-
-const unavailablePromotion: EarlyRisersCodeStore = {
-  async insertOrReuse() {
-    throw new Error("early risers store is not configured");
-  },
-};
 
 function placeholderSession(): Session {
   const session = parseSession({

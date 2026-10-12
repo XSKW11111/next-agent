@@ -15,6 +15,8 @@ export type EarlyRisersCodeRecord = {
 export type EarlyRisersCodeKey = {
   readonly sessionId: SessionId;
   readonly validOn: string;
+  readonly email?: string;
+  readonly timezone?: string;
 };
 
 export type EarlyRisersCodeStore = {
@@ -29,6 +31,7 @@ export type ClaimEarlyRisersInput = {
   readonly now: Date;
   readonly store: EarlyRisersCodeStore;
   readonly issueCode?: () => string;
+  readonly email?: string;
 };
 
 type CivilDate = {
@@ -86,13 +89,21 @@ async function claimResolved(input: ClaimEarlyRisersInput, timeZone: string): Pr
 
   const validOn = isoDate(local.year, local.month, local.day);
   const issueCode = input.issueCode ?? mintEarlyRisersCode;
-  const stored = await input.store.insertOrReuse({ sessionId: input.session.id, validOn }, () => ({
-    sessionId: input.session.id,
-    code: issueCode(),
-    validOn,
-    expiresAt: expiresAt(timeZone, local),
-    timezone: timeZone,
-  }));
+  const stored = await input.store.insertOrReuse(
+    {
+      sessionId: input.session.id,
+      validOn,
+      timezone: timeZone,
+      ...(input.email === undefined ? {} : { email: input.email }),
+    },
+    () => ({
+      sessionId: input.session.id,
+      code: issueCode(),
+      validOn,
+      expiresAt: expiresAt(timeZone, local),
+      timezone: timeZone,
+    }),
+  );
 
   return {
     kind: "promotion_eligible",

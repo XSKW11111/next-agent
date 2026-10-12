@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { orderEmailSchema } from "@/domain/order";
 import { liveChatRuntime } from "@/infra/live-runtime";
 
 const validEnv = {
@@ -16,14 +15,13 @@ const validEnv = {
 };
 
 describe("liveChatRuntime", () => {
-  test("keeps order lookup unavailable and carries the parsed model", async () => {
+  test("reads the hosted catalog and carries the parsed model", async () => {
     const runtime = liveChatRuntime(validEnv, async () => {
       throw new Error("fetch was not part of this check");
     });
-    const email = orderEmailSchema.parse("a@b.co");
-    await expect(runtime.dependencies.orders.catalog.listOrdersForEmail(email)).resolves.toEqual({
-      kind: "unavailable",
-    });
+    await expect(runtime.dependencies.products.catalog.listProducts({ limit: 1, filters: {} })).rejects.toThrow(
+      "product list failed",
+    );
     expect(runtime.config).toMatchObject({
       model: "openai/gpt-4o",
       maxToolRounds: 6,

@@ -19,6 +19,7 @@ const lookupArgsSchema = z.strictObject({
 
 const claimArgsSchema = z.strictObject({
   request: z.string().trim().min(1),
+  email: z.string().trim().min(1).optional(),
 });
 
 const handoffArgsSchema = z.strictObject({
@@ -111,6 +112,7 @@ async function runClaim(call: SupportToolCall): Promise<unknown> {
     now: promotion.now,
     store: promotion.store,
     ...(promotion.issueCode === undefined ? {} : { issueCode: promotion.issueCode }),
+    ...(parsed.data.email === undefined ? {} : { email: parsed.data.email }),
   });
 }
 
