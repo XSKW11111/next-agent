@@ -6,7 +6,7 @@ import type { ProposalStore } from "../business/handoff/handoff";
 import type { OrderCatalog, OrderStreakStore } from "../business/order/lookup-order";
 import type { ProductSearchDependencies } from "../business/product/search-products";
 import type { EarlyRisersCodeStore } from "../business/promotion/claim-early-risers";
-import type { ScriptedModel, SupportTurnDependencies } from "../agent/support-turn";
+import type { ScriptedModel, SupportMessage, SupportTurnDependencies } from "../agent/support-turn";
 import type { MessageStore, SequenceUpdate, TurnMessage } from "./message-store";
 import { submitTurn } from "./submit-turn";
 
@@ -106,6 +106,44 @@ test("a new turn stores the customer row and the assistant draft", async () => {
   expect(messages.rows()).toEqual([
     customerRow(1, turnId, "where is my order"),
     assistantRow(2, turnId, filteredDraft),
+  ]);
+});
+
+test("a second turn sends the completed first turn and then the new customer text", async () => {
+  const messages = memoryMessages();
+  const seen: SupportMessage[][] = [];
+  const model: ScriptedModel = {
+    async complete(input) {
+      seen.push([...input.messages]);
+      const latest = input.messages.at(-1);
+      if (latest?.role === "user" && latest.content === "where is my order") {
+        return { text: "On the way." };
+      }
+      return { text: "Here is the tracking." };
+    },
+  };
+
+  await submitTurn({
+    sessionId,
+    turnId,
+    text: "where is my order",
+    messages,
+    model,
+    dependencies: dependencies(),
+  });
+  await submitTurn({
+    sessionId,
+    turnId: otherTurnId,
+    text: "and the tracking",
+    messages,
+    model,
+    dependencies: dependencies(),
+  });
+
+  expect(seen[1]).toEqual([
+    { role: "user", content: "where is my order" },
+    { role: "assistant", content: "On the way.", toolCalls: [] },
+    { role: "user", content: "and the tracking" },
   ]);
 });
 
@@ -258,6 +296,9 @@ function memoryMessages(options?: { readonly unchangedClaims?: number }): Messag
   const next = new Map<SessionId, number>();
   let unchangedClaims = options?.unchangedClaims ?? 0;
   return {
+    async messagesForSession(session) {
+      return stored.filter((message) => message.sessionId === session);
+    },
     async messagesForTurn(session, turn) {
       return stored.filter((message) => message.sessionId === session && message.turnId === turn);
     },

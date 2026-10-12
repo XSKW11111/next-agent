@@ -169,6 +169,9 @@ function memoryMessages(): MessageStore {
   const stored: TurnMessage[] = [];
   const next = new Map<SessionId, number>();
   return {
+    async messagesForSession(session) {
+      return stored.filter((message) => message.sessionId === session);
+    },
     async messagesForTurn(session, turn) {
       return stored.filter((message) => message.sessionId === session && message.turnId === turn);
     },

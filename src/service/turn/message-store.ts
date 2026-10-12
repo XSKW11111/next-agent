@@ -16,6 +16,7 @@ export type SequenceUpdate =
   | { readonly kind: "unchanged" };
 
 export type MessageStore = {
+  messagesForSession(sessionId: SessionId): Promise<readonly TurnMessage[]>;
   messagesForTurn(sessionId: SessionId, turnId: TurnId): Promise<readonly TurnMessage[]>;
   readNextSequence(sessionId: SessionId): Promise<number>;
   conditionalUpdate(sessionId: SessionId, expected: number): Promise<SequenceUpdate>;

@@ -14,12 +14,12 @@ import type { OrderCatalog, OrderStreakStore } from "../../../service/business/o
 import type { ProductSearchDependencies } from "../../../service/business/product/search-products";
 import type { EarlyRisersCodeStore } from "../../../service/business/promotion/claim-early-risers";
 import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
-import type { SequenceUpdate, TurnMessage } from "../../../service/turn/message-store";
+import type { MessageStore, SequenceUpdate, TurnMessage } from "../../../service/turn/message-store";
 import { POST as createSession } from "./sessions/route";
 import { GET as readMessages, POST as sendMessage } from "./sessions/[id]/messages/route";
 import { POST as confirmProposal } from "./sessions/[id]/handoffs/[proposalId]/confirm/route";
 import { POST as cancelProposal } from "./sessions/[id]/handoffs/[proposalId]/cancel/route";
-import { installChatRuntime, type ChatMessageLog, type ChatRuntime, type SessionStore } from "./runtime";
+import { installChatRuntime, type ChatRuntime, type SessionStore } from "./runtime";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const otherSessionId = "55555555-5555-4555-8555-555555555555";
@@ -275,7 +275,7 @@ async function startedRuntime(model: ScriptedModel): Promise<TestRuntime> {
 
 type TestRuntime = ChatRuntime & {
   sessions: SessionStore & { saved(): readonly Session[] };
-  messages: ChatMessageLog & { saved(): readonly TurnMessage[] };
+  messages: MessageStore & { saved(): readonly TurnMessage[] };
   proposals: ProposalStore & { cases(): SupportCase[] };
 };
 
@@ -352,7 +352,7 @@ function memorySessions(): SessionStore & { saved(): readonly Session[] } {
   };
 }
 
-function memoryMessages(): ChatMessageLog & { saved(): readonly TurnMessage[] } {
+function memoryMessages(): MessageStore & { saved(): readonly TurnMessage[] } {
   const stored: TurnMessage[] = [];
   const next = new Map<SessionId, number>();
   return {
