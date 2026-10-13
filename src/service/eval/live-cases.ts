@@ -1,20 +1,46 @@
-import { gradeCase, scoreCaseTrials, type EvalCaseId } from "./grade-case";
+import {
+  gradeCase,
+  scoreCaseTrials,
+  type EvalCaseId,
+  type GradeInput,
+  type GradeOrder,
+  type ShortAcceptVariant,
+} from "./grade-case";
 
 const trialCount = 5;
+
+export type LiveTrialTrace = {
+  readonly traceId: string;
+  readonly traceUrl: string;
+  readonly lookupResult?: GradeInput["lookupResult"];
+  readonly orders?: readonly GradeOrder[];
+  readonly priorCustomerSentence?: string;
+  readonly priorAssistantSentence?: string;
+};
+
+export type LiveAskResult = {
+  readonly replies: readonly string[];
+  readonly traces: readonly LiveTrialTrace[];
+};
+
+export type LiveAskContext = {
+  readonly id: EvalCaseId;
+  readonly turns: readonly string[];
+  readonly variant?: ShortAcceptVariant;
+};
+
+export type LiveAsk = (context: LiveAskContext) => Promise<LiveAskResult>;
 
 export type LiveTurn = {
   readonly id: EvalCaseId;
   readonly turns: readonly string[];
-  grade(replies: readonly string[]): boolean;
-};
-
-export type SkippedLiveCase = {
-  readonly id: EvalCaseId;
-  readonly skipped: string;
+  readonly variant?: ShortAcceptVariant;
+  grade(replies: readonly string[], traces: readonly LiveTrialTrace[]): boolean;
 };
 
 export type LiveCaseScore = {
   readonly id: EvalCaseId;
+  readonly variant?: ShortAcceptVariant;
   readonly trials: number;
   readonly passed: number;
   readonly passAt1: number;
@@ -22,16 +48,29 @@ export type LiveCaseScore = {
   readonly passAll1: number;
   readonly passAll3: number;
   readonly sample: string;
+  readonly trialTraces: readonly {
+    readonly traceId: string;
+    readonly traceUrl: string;
+  }[];
 };
 
-export type LiveCaseResult = LiveCaseScore | SkippedLiveCase;
+export type LiveCaseResult = LiveCaseScore;
 
 const orderFound = "My email is jane.smith@example.com. Where is order #W002?";
+const orderMiss = "My email is jane.smith@example.com. Where is order #W999?";
+const orderOutage = "My email is jane.smith@example.com. Where is order #W002?";
+const emailOrders = "My email is jane.smith@example.com. What orders do I have?";
 const snow = "What skis do you recommend for snow?";
 const claim = "I want to claim the Early Risers discount.";
 const explain = "What discounts do you offer?";
+const shortYes = "yes";
 const handoff =
   "I want a person to help me. Contact me at person@example.com. The reason is the shipment needs a person.";
+
+const emailOrdersFixture: readonly GradeOrder[] = [
+  { orderNumber: "#W002", status: "in-transit" },
+  { orderNumber: "#W003", status: "processing" },
+];
 
 export const scoredLiveCases: readonly LiveTurn[] = [
   {
@@ -79,51 +118,122 @@ export const scoredLiveCases: readonly LiveTurn[] = [
       return gradeCase("handoff-propose", { reply: replyAt(replies, 0) });
     },
   },
-];
-
-export const skippedLiveCases: readonly SkippedLiveCase[] = [
   {
     id: "order-miss",
-    skipped: "The chat reply does not include the tool name, so a miss cannot be scored from the text.",
+    turns: [orderMiss],
+    grade(replies, traces) {
+      const trace = traces.at(-1);
+      return gradeCase("order-miss", {
+        reply: replyAt(replies, 0),
+        lookupResult: trace?.lookupResult,
+        requestedOrder: "#W999",
+      });
+    },
   },
   {
     id: "order-outage",
-    skipped: "The live catalog is reachable, so a normal turn does not produce the outage sentence.",
+    turns: [orderOutage],
+    grade(replies) {
+      return gradeCase("order-outage", { reply: replyAt(replies, 0) });
+    },
   },
   {
     id: "email-orders",
-    skipped: "The hosted order check names #W002 only, so the two-order reply is not a fixed case.",
+    turns: [emailOrders],
+    grade(replies, traces) {
+      const trace = traces.at(-1);
+      return gradeCase("email-orders", {
+        reply: replyAt(replies, 0),
+        orders: trace?.orders ?? emailOrdersFixture,
+      });
+    },
+  },
+  {
+    id: "early-risers-short-accept",
+    variant: "inside",
+    turns: [explain, shortYes],
+    grade(replies, traces) {
+      return gradeShort("inside", replies, traces);
+    },
+  },
+  {
+    id: "early-risers-short-accept",
+    variant: "outside",
+    turns: [explain, shortYes],
+    grade(replies, traces) {
+      return gradeShort("outside", replies, traces);
+    },
+  },
+  {
+    id: "early-risers-short-accept",
+    variant: "unresolved",
+    turns: [explain, shortYes],
+    grade(replies, traces) {
+      return gradeShort("unresolved", replies, traces);
+    },
   },
 ];
 
-export async function runLiveCases(
-  ask: (turns: readonly string[]) => Promise<readonly string[]>,
-): Promise<readonly LiveCaseResult[]> {
+/** @deprecated Skipped cases are retired; kept empty for callers that still import the name. */
+export const skippedLiveCases: readonly never[] = [];
+
+export async function runLiveCases(ask: LiveAsk): Promise<readonly LiveCaseResult[]> {
   const scored: LiveCaseResult[] = [];
   for (const item of scoredLiveCases) {
     scored.push(await scoreTurns(item, ask));
   }
-  return [...scored, ...skippedLiveCases];
+  return scored;
 }
 
-async function scoreTurns(
-  item: LiveTurn,
-  ask: (turns: readonly string[]) => Promise<readonly string[]>,
-): Promise<LiveCaseScore> {
+export function langsmithTraceUrl(project: string, runId: string): string {
+  return `https://smith.langchain.com/o/default/projects/p/${encodeURIComponent(project)}/r/${encodeURIComponent(runId)}`;
+}
+
+async function scoreTurns(item: LiveTurn, ask: LiveAsk): Promise<LiveCaseScore> {
   const results: boolean[] = [];
+  const trialTraces: { traceId: string; traceUrl: string }[] = [];
   let sample = "";
   for (let trial = 0; trial < trialCount; trial += 1) {
     try {
-      const replies = await ask(item.turns);
-      const passed = item.grade(replies);
+      const asked = await ask({
+        id: item.id,
+        turns: item.turns,
+        ...(item.variant === undefined ? {} : { variant: item.variant }),
+      });
+      const passed = item.grade(asked.replies, asked.traces);
       results.push(passed);
-      if (!passed && sample === "") sample = replyAt(replies, 0);
+      const last = asked.traces.at(-1);
+      if (last !== undefined) {
+        trialTraces.push({ traceId: last.traceId, traceUrl: last.traceUrl });
+      }
+      if (!passed && sample === "") sample = replyAt(asked.replies, 0);
     } catch (error) {
       results.push(false);
       if (sample === "") sample = error instanceof Error ? error.message : "trial failed";
     }
   }
-  return { id: item.id, ...scoreCaseTrials(results), sample };
+  return {
+    id: item.id,
+    ...(item.variant === undefined ? {} : { variant: item.variant }),
+    ...scoreCaseTrials(results),
+    sample,
+    trialTraces,
+  };
+}
+
+function gradeShort(
+  variant: ShortAcceptVariant,
+  replies: readonly string[],
+  traces: readonly LiveTrialTrace[],
+): boolean {
+  const second = traces.at(1);
+  return gradeCase("early-risers-short-accept", {
+    reply: replyAt(replies, 0),
+    secondReply: replyAt(replies, 1),
+    shortAcceptVariant: variant,
+    priorCustomerSentence: second?.priorCustomerSentence,
+    priorAssistantSentence: second?.priorAssistantSentence,
+  });
 }
 
 function replyAt(replies: readonly string[], index: number): string {
