@@ -2,7 +2,7 @@ import { parseTurn, type Turn } from "../../domain/turn";
 import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "../agent/support-turn";
 import { customerToolCards, type ToolCardStore } from "../tool/customer-tool-cards";
 import type { MessageStore, TurnMessage } from "./message-store";
-import { priorSupportMessages } from "./prior-messages";
+import { priorContext } from "./prior-messages";
 
 export type SubmitTurnResult =
   | { readonly kind: "reply"; readonly reply: string }
@@ -61,16 +61,15 @@ async function saveNewTurn(input: SubmitTurnInput, turn: Turn): Promise<SubmitTu
     content: turn.text,
   });
 
-  const priorMessages = priorSupportMessages(
-    await input.messages.messagesForSession(turn.sessionId),
-    turn.id,
-  );
+  const history = priorContext(await input.messages.messagesForSession(turn.sessionId), turn.id);
   const completion = await runSupportTurn({
     model: input.model,
     sessionId: turn.sessionId,
     threadId: turn.sessionId,
     customerText: turn.text,
-    priorMessages,
+    priorMessages: history.messages,
+    priorSummary: history.summary,
+    priorSequences: history.sequences,
     dependencies: input.dependencies,
     ...(input.maxToolRounds === undefined ? {} : { maxToolRounds: input.maxToolRounds }),
     ...(input.productMatchThreshold === undefined
@@ -87,6 +86,15 @@ async function saveNewTurn(input: SubmitTurnInput, turn: Turn): Promise<SubmitTu
     role: "assistant",
     content: completion.draft,
   });
+  if (completion.contextSummary !== null) {
+    await input.messages.insert({
+      sessionId: turn.sessionId,
+      turnId: turn.id,
+      role: "summary",
+      content: completion.contextSummary.summary,
+      sequence: completion.contextSummary.coveredThrough,
+    });
+  }
 
   if (input.toolCards !== undefined) {
     const cards = customerToolCards(completion.toolPayloads);
@@ -140,6 +148,8 @@ function recordTurn(messages: readonly TurnMessage[]): RecordedTurn {
         break;
       case "assistant":
         assistant ??= message;
+        break;
+      case "summary":
         break;
       default: {
         const unexpected: never = message.role;

@@ -31,6 +31,24 @@ test("prior support messages recall completed turns in sequence and skip the cur
   ]);
 });
 
+test("a stored summary hides the covered turns and keeps the later raw turns", () => {
+  const messages = priorSupportMessages(
+    [
+      row(1, firstTurnId, "customer", "First question."),
+      row(2, firstTurnId, "assistant", "First answer."),
+      row(2, firstTurnId, "summary", "Earlier turns."),
+      row(3, secondTurnId, "customer", "Second question."),
+      row(4, secondTurnId, "assistant", "Second answer."),
+    ],
+    turnId(currentTurnId),
+  );
+
+  expect(messages).toEqual([
+    { role: "user", content: "Second question." },
+    { role: "assistant", content: "Second answer.", toolCalls: [] },
+  ]);
+});
+
 function turnId(id: string): TurnId {
   const turn = parseTurn({ id, sessionId, text: "fixture" });
   if (!turn.ok) throw new Error("test fixture did not parse");

@@ -84,7 +84,9 @@ export async function GET(
 
   const messages = await runtime.messages.messagesForSession(sessionId.value);
   return Response.json({
-    messages: [...messages].sort((left, right) => left.sequence - right.sequence),
+    messages: [...messages]
+      .filter((message) => message.role !== "summary")
+      .sort((left, right) => left.sequence - right.sequence),
     proposals: runtime.proposals.listProposals(sessionId.value),
     toolCards: runtime.toolCards.listForSession(sessionId.value),
   });

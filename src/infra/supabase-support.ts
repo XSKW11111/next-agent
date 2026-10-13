@@ -14,7 +14,7 @@ const sessionRowSchema = z.object({
 const messageRowSchema = z.object({
   session_id: z.string(),
   turn_id: z.string(),
-  role: z.enum(["user", "assistant"]),
+  role: z.enum(["user", "assistant", "summary"]),
   content: z.string(),
   sequence: z.coerce.number().int().positive(),
 });
@@ -175,12 +175,14 @@ function sequenceUpdate(data: unknown, expected: number): SequenceUpdate {
   return { kind: "updated", sequence: expected };
 }
 
-function storedRole(role: MessageRole): "user" | "assistant" {
+function storedRole(role: MessageRole): "user" | "assistant" | "summary" {
   switch (role) {
     case "customer":
       return "user";
     case "assistant":
       return "assistant";
+    case "summary":
+      return "summary";
     default: {
       const unreachable: never = role;
       return unreachable;
@@ -188,12 +190,14 @@ function storedRole(role: MessageRole): "user" | "assistant" {
   }
 }
 
-function messageRole(role: "user" | "assistant"): MessageRole {
+function messageRole(role: "user" | "assistant" | "summary"): MessageRole {
   switch (role) {
     case "user":
       return "customer";
     case "assistant":
       return "assistant";
+    case "summary":
+      return "summary";
     default: {
       const unreachable: never = role;
       return unreachable;

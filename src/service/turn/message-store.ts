@@ -1,7 +1,7 @@
 import type { SessionId } from "../../domain/session";
 import type { TurnId } from "../../domain/turn";
 
-export type MessageRole = "customer" | "assistant";
+export type MessageRole = "customer" | "assistant" | "summary";
 
 export type TurnMessage = {
   readonly sessionId: SessionId;
