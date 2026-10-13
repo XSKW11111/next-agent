@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AgentConfig } from "./agent-config";
 import { contextWindowTokens } from "@/service/agent/context-summary";
 import type { ScriptedModel, ScriptedReply, SupportMessage } from "@/service/agent/support-turn";
+import { logStep } from "@/service/turn/step-log";
 
 // cl100k_base is our count. DeepSeek's tokenizer can disagree, and the hard budget stays below the window so that gap is slack.
 const contextEncoder = getEncoding("cl100k_base");
@@ -122,6 +123,7 @@ export class ContextBudgetExceeded extends Error {
 export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): ScriptedModel {
   return {
     async summarize(prompt) {
+      const started = performance.now();
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -135,9 +137,11 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
         }),
       });
       if (!response.ok) {
+        logStep("openrouter-summarize", started);
         throw await failedResponse(response, config.debugToolDetails);
       }
       const reply = await readReply(response, config.debugToolDetails);
+      logStep("openrouter-summarize", started);
       return reply.text;
     },
     async complete(input) {
@@ -146,6 +150,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
         tools,
         contextWindowTokens,
       );
+      const started = performance.now();
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -159,9 +164,12 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
         }),
       });
       if (!response.ok) {
+        logStep("openrouter-complete", started);
         throw await failedResponse(response, config.debugToolDetails);
       }
-      return readReply(response, config.debugToolDetails);
+      const reply = await readReply(response, config.debugToolDetails);
+      logStep("openrouter-complete", started);
+      return reply;
     },
   };
 }

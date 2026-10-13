@@ -116,6 +116,41 @@ test("the same turn id with different text returns 409", async () => {
   ]);
 });
 
+test("nine tool calls in one reply return 200 and store the assistant line", async () => {
+  const model: ScriptedModel = {
+    async complete() {
+      return {
+        text: "Checking everything.",
+        toolCalls: Array.from({ length: 9 }, (_item, index) => ({
+          id: `search-${index}`,
+          name: "search_products" as const,
+          args: { mode: "list" },
+        })),
+      };
+    },
+  };
+  const runtime = await startedRuntime(model);
+
+  const response = await sendMessage(
+    jsonRequest({ turnId, text: "check every product" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+
+  expect(response.status).toBe(200);
+  expect(await replyText(response)).toBe(
+    "I can only check a few things at once. Ask for one order, product, or claim.",
+  );
+  expect(runtime.messages.saved()).toEqual([
+    customerRow(1, turnId, "check every product"),
+    assistantRow(
+      2,
+      turnId,
+      "I can only check a few things at once. Ask for one order, product, or claim.",
+    ),
+  ]);
+});
+
 test("a customer row with no assistant row returns 409 already_submitted", async () => {
   const calls = { count: 0 };
   const runtime = await startedRuntime(replyModel(calls, "On the way."));
