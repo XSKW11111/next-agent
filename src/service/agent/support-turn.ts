@@ -10,6 +10,7 @@ import {
 import { finalizeSupportAnswer } from "../answer/finalize-support-answer";
 import { runToolRound, type ToolCall, type ToolName } from "../tool/run-tool-round";
 import { runSupportTool, type SupportToolDependencies } from "../tool/support-tools";
+import type { StoredSupportMessage } from "../turn/prior-messages";
 import { supportSystemPrompt } from "./prompts/system";
 
 const defaultMaxToolRounds = 6;
@@ -90,6 +91,7 @@ export type SupportTurnInput = {
   readonly model: ScriptedModel;
   readonly sessionId: string;
   readonly customerText: string;
+  readonly priorMessages: readonly StoredSupportMessage[];
   readonly dependencies: SupportTurnDependencies;
   readonly threadId?: string;
   readonly signal?: AbortSignal;
@@ -153,6 +155,13 @@ type ReadyTurn = {
   readonly dependencies: SupportTurnDependencies;
 };
 
+function seedSupportMessages(
+  priorMessages: readonly StoredSupportMessage[],
+  customerText: string,
+): readonly SupportMessage[] {
+  return [...priorMessages, { role: "user", content: customerText }];
+}
+
 export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompletion> {
   throwIfAborted(input.signal);
   if (input.threadId !== undefined && input.threadId !== input.sessionId) {
@@ -179,7 +188,7 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
   });
   const state = await graph.invoke(
     {
-      messages: [{ role: "user", content: customerText }],
+      messages: [...seedSupportMessages(input.priorMessages, customerText)],
       unmatchedOrderCount: streak.streak,
     },
     {

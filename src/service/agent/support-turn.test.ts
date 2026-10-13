@@ -83,6 +83,7 @@ test("a scripted lookup_order returns the service payload and a filtered draft",
   };
 
   const result = await runSupportTurn({
+    priorMessages: [],
     model,
     sessionId,
     threadId: sessionId,
@@ -129,6 +130,7 @@ test("two lookup_order calls in one round keep their result order", async () => 
   };
 
   const result = await runSupportTurn({
+    priorMessages: [],
     model,
     sessionId,
     customerText: "Check W002 and W003.",
@@ -176,6 +178,7 @@ test("capture_handoff puts the first draft on handoffDraft", async () => {
   };
 
   const result = await runSupportTurn({
+    priorMessages: [],
     model,
     sessionId,
     customerText: "I need a person at person@example.com about AB12.",
@@ -207,6 +210,7 @@ test("a seventh tool round does not call the model again", async () => {
   };
 
   const result = await runSupportTurn({
+    priorMessages: [],
     model,
     sessionId,
     customerText: "Keep looking up W002.",
@@ -245,6 +249,7 @@ test("a supplied thread id that differs from the session id throws before the mo
 
   await expect(
     runSupportTurn({
+      priorMessages: [],
       model,
       sessionId,
       threadId: otherThreadId,
@@ -279,6 +284,7 @@ test("an aborted deadline throws before tool work", async () => {
 
   await expect(
     runSupportTurn({
+      priorMessages: [],
       model,
       sessionId,
       customerText: "Where is order W002?",
@@ -309,6 +315,7 @@ test("search uses the turn match threshold and candidate limit", async () => {
   };
 
   const result = await runSupportTurn({
+    priorMessages: [],
     model,
     sessionId,
     customerText: "Do you have a mug?",

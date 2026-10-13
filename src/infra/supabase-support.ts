@@ -64,11 +64,7 @@ export function supabaseSessions(client: SupabaseClient): {
   };
 }
 
-export function supabaseMessages(
-  client: SupabaseClient,
-): MessageStore & {
-  messagesForSession(sessionId: SessionId): Promise<readonly TurnMessage[]>;
-} {
+export function supabaseMessages(client: SupabaseClient): MessageStore {
   return {
     async messagesForSession(sessionId) {
       return readMessages(client, sessionId);
