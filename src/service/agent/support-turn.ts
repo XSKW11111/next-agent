@@ -11,6 +11,7 @@ import { finalizeSupportAnswer } from "../answer/finalize-support-answer";
 import { runToolRound, type ToolCall, type ToolName } from "../tool/run-tool-round";
 import { runSupportTool, type SupportToolDependencies } from "../tool/support-tools";
 import type { StoredSupportMessage } from "../turn/prior-messages";
+import { logStep } from "../turn/step-log";
 import {
   compactHistory,
   contextWindowTokens,
@@ -215,19 +216,35 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     dependencies: input.dependencies,
   });
   const seeded = [...seedSupportMessages(input.priorMessages, customerText)];
-  const state = await graph.invoke(
-    {
-      messages: seeded,
-      summary: input.priorSummary ?? "",
-      lineages: seedLineages(input.priorSequences, seeded.length),
+  const turnStarted = performance.now();
+  let state: Awaited<ReturnType<ReturnType<typeof compileSupportGraph>["invoke"]>>;
+  try {
+    state = await graph.invoke(
+      {
+        messages: seeded,
+        summary: input.priorSummary ?? "",
+        lineages: seedLineages(input.priorSequences, seeded.length),
+        unmatchedOrderCount: streak.streak,
+      },
+      {
+        recursionLimit: maxToolRounds * 2 + 2,
+        signal: input.signal,
+        configurable: { thread_id: sessionId },
+      },
+    );
+  } catch (error) {
+    if (!isTooManyToolCalls(error)) throw error;
+    logStep("too-many-tool-calls", turnStarted);
+    return {
+      draft: "I can only check a few things at once. Ask for one order, product, or claim.",
+      toolPayloads: [],
+      toolTraces: [],
       unmatchedOrderCount: streak.streak,
-    },
-    {
-      recursionLimit: maxToolRounds * 2 + 2,
-      signal: input.signal,
-      configurable: { thread_id: sessionId },
-    },
-  );
+      handoffDraft: undefined,
+      contextSummary: null,
+    };
+  }
+  logStep("support-graph", turnStarted);
 
   return {
     draft: finalizeSupportAnswer({
@@ -263,6 +280,7 @@ function compileSupportGraph(ready: ReadyTurn) {
 async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
   const summarize = ready.model.summarize?.bind(ready.model);
+  const summarizeStarted = performance.now();
   const compacted = await compactHistory({
     systemPrompt: supportSystemPrompt,
     messages: compactMessages(state),
@@ -272,6 +290,7 @@ async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Par
       throw new SupportTurnRejected("summary model is unavailable");
     }),
   });
+  logStep("summarize", summarizeStarted);
   throwIfAborted(ready.signal);
   return {
     summary: compacted.summary?.summary ?? "",
@@ -281,10 +300,12 @@ async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Par
 
 async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
+  const completeStarted = performance.now();
   const reply = await ready.model.complete({
     systemPrompt: systemPromptWithSummary(state.summary),
     messages: state.messages.slice(state.keptFrom),
   });
+  logStep("model-complete", completeStarted);
   throwIfAborted(ready.signal);
   const parsed = replySchema.safeParse(reply);
   if (!parsed.success) {
@@ -323,7 +344,9 @@ async function toolsNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
     tool: call.name,
     run: () => runCall(call, ready),
   }));
+  const roundStarted = performance.now();
   const round = await runToolRound(calls);
+  logStep("tool-round", roundStarted);
   if (!round.ok) {
     switch (round.reason) {
       case "too_many_calls":
@@ -471,6 +494,14 @@ function savedSummary(
     .reduce((highest, sequence) => (sequence > highest ? sequence : highest), 0);
   if (coveredThrough === 0) return null;
   return { summary: state.summary, coveredThrough };
+}
+
+function isTooManyToolCalls(error: unknown): boolean {
+  if (error instanceof SupportTurnRejected && error.message === "too many tool calls") return true;
+  if (typeof error === "object" && error !== null && "cause" in error) {
+    return isTooManyToolCalls(error.cause);
+  }
+  return false;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

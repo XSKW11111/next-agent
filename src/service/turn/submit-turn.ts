@@ -3,6 +3,7 @@ import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from
 import { customerToolCards, type ToolCardStore } from "../tool/customer-tool-cards";
 import type { MessageStore, TurnMessage } from "./message-store";
 import { priorContext } from "./prior-messages";
+import { logStep } from "./step-log";
 
 export type SubmitTurnResult =
   | { readonly kind: "reply"; readonly reply: string }
@@ -54,14 +55,18 @@ export async function submitTurn(input: SubmitTurnInput): Promise<SubmitTurnResu
 }
 
 async function saveNewTurn(input: SubmitTurnInput, turn: Turn): Promise<SubmitTurnResult> {
+  const customerStarted = performance.now();
   await insertRow(input.messages, {
     sessionId: turn.sessionId,
     turnId: turn.id,
     role: "customer",
     content: turn.text,
   });
+  logStep("insert-customer", customerStarted);
 
+  const historyStarted = performance.now();
   const history = priorContext(await input.messages.messagesForSession(turn.sessionId), turn.id);
+  logStep("prior-context", historyStarted);
   const completion = await runSupportTurn({
     model: input.model,
     sessionId: turn.sessionId,
@@ -80,12 +85,14 @@ async function saveNewTurn(input: SubmitTurnInput, turn: Turn): Promise<SubmitTu
       : { maxProductCandidates: input.maxProductCandidates }),
   });
 
+  const assistantStarted = performance.now();
   await insertRow(input.messages, {
     sessionId: turn.sessionId,
     turnId: turn.id,
     role: "assistant",
     content: completion.draft,
   });
+  logStep("insert-assistant", assistantStarted);
   if (completion.contextSummary !== null) {
     await input.messages.insert({
       sessionId: turn.sessionId,

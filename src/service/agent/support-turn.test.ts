@@ -147,6 +147,36 @@ test("two lookup_order calls in one round keep their result order", async () => 
   expect(result.draft).toBe("Both orders are in.");
 });
 
+test("nine tool calls in one reply still return an assistant draft", async () => {
+  const streaks = streakStore(0);
+  const model: ScriptedModel = {
+    async complete() {
+      return {
+        text: "Checking everything.",
+        toolCalls: Array.from({ length: 9 }, (_item, index) => ({
+          id: `search-${index}`,
+          name: "search_products" as const,
+          args: { mode: "list" },
+        })),
+      };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [],
+    model,
+    sessionId,
+    customerText: "Check every product.",
+    dependencies: dependencies(streaks),
+  });
+
+  expect(result.draft).toBe(
+    "I can only check a few things at once. Ask for one order, product, or claim.",
+  );
+  expect(result.toolPayloads).toEqual([]);
+  expect(result.toolTraces).toEqual([]);
+});
+
 test("capture_handoff puts the first draft on handoffDraft", async () => {
   const model: ScriptedModel = {
     async complete(input) {
