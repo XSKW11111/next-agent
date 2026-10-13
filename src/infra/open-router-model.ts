@@ -1,6 +1,10 @@
+import { getEncoding } from "js-tiktoken";
 import { z } from "zod";
 import type { AgentConfig } from "./agent-config";
 import type { ScriptedModel, ScriptedReply, SupportMessage } from "@/service/agent/support-turn";
+
+// cl100k_base is our count. DeepSeek's tokenizer can disagree, and the hard budget stays below the window so that gap is slack.
+const contextEncoder = getEncoding("cl100k_base");
 
 const toolNames = ["lookup_order", "search_products", "claim_early_risers", "capture_handoff"] as const;
 
@@ -107,9 +111,21 @@ type ChatMessage =
     }
   | { readonly role: "tool"; readonly tool_call_id: string; readonly content: string };
 
+export class ContextBudgetExceeded extends Error {
+  constructor() {
+    super("context hard cap exceeded");
+    this.name = "ContextBudgetExceeded";
+  }
+}
+
 export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): ScriptedModel {
   return {
     async complete(input) {
+      const messages = fitContext(
+        toChatMessages(input.systemPrompt, input.messages),
+        tools,
+        config.contextHardTokens,
+      );
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -118,7 +134,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
         },
         body: JSON.stringify({
           model: config.model,
-          messages: toChatMessages(input.systemPrompt, input.messages),
+          messages,
           tools,
         }),
       });
@@ -128,6 +144,61 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       return readReply(response, config.debugToolDetails);
     },
   };
+}
+
+function tokenCount(value: unknown): number {
+  return contextEncoder.encode(JSON.stringify(value)).length;
+}
+
+function fitContext(
+  messages: readonly ChatMessage[],
+  tools: readonly unknown[],
+  hardTokens: number,
+): ChatMessage[] {
+  const system = messages[0];
+  if (system?.role !== "system") {
+    throw new Error("context fit requires a system message");
+  }
+  const protectedStart = lastUserIndex(messages);
+  let prefix = messages.slice(1, protectedStart);
+  const suffix = messages.slice(protectedStart);
+  while (
+    prefix.length > 0 &&
+    tokenCount({ messages: [system, ...prefix, ...suffix], tools }) > hardTokens
+  ) {
+    prefix = prefix.slice(prefixDropCount(prefix));
+  }
+  const fitted = [system, ...prefix, ...suffix];
+  if (tokenCount({ messages: fitted, tools }) > hardTokens) {
+    throw new ContextBudgetExceeded();
+  }
+  return fitted;
+}
+
+function lastUserIndex(messages: readonly ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") return index;
+  }
+  return 1;
+}
+
+function prefixDropCount(prefix: readonly ChatMessage[]): 1 | 2 {
+  const first = prefix[0];
+  const second = prefix[1];
+  if (first === undefined) return 1;
+  switch (first.role) {
+    case "user":
+      return second?.role === "assistant" ? 2 : 1;
+    case "system":
+    case "assistant":
+    case "tool":
+      return 1;
+    default: {
+      const unexpected: never = first;
+      return unexpected;
+    }
+  }
 }
 
 function toChatMessages(systemPrompt: string, messages: readonly SupportMessage[]): ChatMessage[] {

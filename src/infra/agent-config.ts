@@ -3,6 +3,9 @@ import { z } from "zod";
 const requiredTextSchema = z.string().trim().min(1);
 const positiveInt = z.coerce.number().int().positive();
 
+/** Code default for the hard cap. A set CONTEXT_HARD_TOKENS replaces it. */
+export const defaultContextHardTokens = 120_000;
+
 const envSchema = z
   .object({
     OPENROUTER_API_KEY: requiredTextSchema,
@@ -13,11 +16,12 @@ const envSchema = z
     MAX_PRODUCT_CANDIDATES: positiveInt.max(20),
     MAX_TOOL_ROUNDS: positiveInt.max(12),
     CONTEXT_WINDOW_TOKENS: positiveInt,
-    CONTEXT_HARD_TOKENS: positiveInt,
+    CONTEXT_HARD_TOKENS: positiveInt.optional(),
     NEXT_AGENT_DEBUG_TOOL_DETAILS: z.enum(["true", "false"]),
   })
   .superRefine((env, context) => {
-    if (env.CONTEXT_HARD_TOKENS >= env.CONTEXT_WINDOW_TOKENS) {
+    const hardTokens = env.CONTEXT_HARD_TOKENS ?? defaultContextHardTokens;
+    if (hardTokens >= env.CONTEXT_WINDOW_TOKENS) {
       context.addIssue({
         code: "custom",
         path: ["CONTEXT_HARD_TOKENS"],
@@ -62,7 +66,7 @@ export function parseAgentConfig(
       maxProductCandidates: parsed.data.MAX_PRODUCT_CANDIDATES,
       maxToolRounds: parsed.data.MAX_TOOL_ROUNDS,
       contextWindowTokens: parsed.data.CONTEXT_WINDOW_TOKENS,
-      contextHardTokens: parsed.data.CONTEXT_HARD_TOKENS,
+      contextHardTokens: parsed.data.CONTEXT_HARD_TOKENS ?? defaultContextHardTokens,
       debugToolDetails: parsed.data.NEXT_AGENT_DEBUG_TOOL_DETAILS === "true",
     },
   };
