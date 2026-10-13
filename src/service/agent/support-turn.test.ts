@@ -98,6 +98,7 @@ test("a scripted lookup_order returns the service payload and a filtered draft",
     toolTraces: [{ callId: "lookup-1", tool: "lookup_order" }],
     unmatchedOrderCount: 0,
     handoffDraft: undefined,
+    contextSummary: null,
   });
   expect(streaks.current()).toBe(0);
 });
@@ -356,6 +357,49 @@ test("search uses the turn match threshold and candidate limit", async () => {
     alternatives: [{ name: "Spare Lid", stockLevel: 1 }],
   });
   expect(result.draft).toBe("Camp Mug is in stock.");
+});
+
+test("the summarize node keeps the current turn raw once history passes 70 percent", async () => {
+  const seen: { systemPrompt: string; messages: readonly { role: string; content: string }[] }[] = [];
+  let summaries = 0;
+  const oldTurn = Array.from({ length: 4000 }, (_item, index) => `fact${index}`).join(" ");
+  const model: ScriptedModel = {
+    async summarize() {
+      summaries += 1;
+      return "Earlier order facts.";
+    },
+    async complete(input) {
+      seen.push({
+        systemPrompt: input.systemPrompt,
+        messages: input.messages.map((message) => ({ role: message.role, content: message.content })),
+      });
+      return { text: "Your order is shipped." };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [
+      { role: "user", content: oldTurn },
+      { role: "assistant", content: "Noted.", toolCalls: [] },
+    ],
+    priorSequences: [1, 2],
+    contextWindowTokens: 8_000,
+    priorSummary: null,
+    model,
+    sessionId,
+    threadId: sessionId,
+    customerText: "Where is order W002?",
+    dependencies: dependencies(streakStore(0)),
+  });
+
+  expect(summaries).toBe(1);
+  expect(seen[0]?.systemPrompt).toContain("Earlier order facts.");
+  expect(seen[0]?.messages.map((message) => message.content)).toEqual([
+    "Noted.",
+    "Where is order W002?",
+  ]);
+  expect(seen[0]?.messages.some((message) => message.content.includes("fact0"))).toBe(false);
+  expect(result.contextSummary).toEqual({ summary: "Earlier order facts.", coveredThrough: 1 });
 });
 
 function dependencies(streaks: OrderStreakStore): SupportTurnDependencies {

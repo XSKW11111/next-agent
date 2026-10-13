@@ -11,6 +11,12 @@ import { finalizeSupportAnswer } from "../answer/finalize-support-answer";
 import { runToolRound, type ToolCall, type ToolName } from "../tool/run-tool-round";
 import { runSupportTool, type SupportToolDependencies } from "../tool/support-tools";
 import type { StoredSupportMessage } from "../turn/prior-messages";
+import {
+  compactHistory,
+  contextWindowTokens,
+  type CompactMessage,
+  type RunningSummary,
+} from "./context-summary";
 import { supportSystemPrompt } from "./prompts/system";
 
 const defaultMaxToolRounds = 6;
@@ -63,6 +69,7 @@ export type ScriptedModel = {
     readonly systemPrompt: string;
     readonly messages: readonly SupportMessage[];
   }): ScriptedReply | Promise<ScriptedReply>;
+  summarize?(prompt: string): Promise<string>;
 };
 
 export type ScriptedReply = {
@@ -83,6 +90,7 @@ export type TurnCompletion = {
   readonly toolTraces: readonly ToolTrace[];
   readonly unmatchedOrderCount: UnmatchedOrderStreak;
   readonly handoffDraft: HandoffDraft | undefined;
+  readonly contextSummary: { readonly summary: string; readonly coveredThrough: number } | null;
 };
 
 export type SupportTurnDependencies = SupportToolDependencies;
@@ -92,6 +100,9 @@ export type SupportTurnInput = {
   readonly sessionId: string;
   readonly customerText: string;
   readonly priorMessages: readonly StoredSupportMessage[];
+  readonly priorSummary?: string | null;
+  readonly priorSequences?: readonly number[];
+  readonly contextWindowTokens?: number;
   readonly dependencies: SupportTurnDependencies;
   readonly threadId?: string;
   readonly signal?: AbortSignal;
@@ -112,6 +123,9 @@ type TurnChannels = {
   toolTraces: ToolTrace[];
   unmatchedOrderCount: UnmatchedOrderStreak;
   heldHandoff: HeldHandoff;
+  summary: string;
+  keptFrom: number;
+  lineages: number[];
 };
 
 const TurnState = Annotation.Root({
@@ -143,6 +157,18 @@ const TurnState = Annotation.Root({
     reducer: keepFirstHandoff,
     default: () => ({ kind: "none" }),
   }),
+  summary: Annotation<string>({
+    reducer: (_left, right) => right,
+    default: () => "",
+  }),
+  keptFrom: Annotation<number>({
+    reducer: (_left, right) => right,
+    default: () => 0,
+  }),
+  lineages: Annotation<number[]>({
+    reducer: (_left, right) => right,
+    default: () => [],
+  }),
 });
 
 type ReadyTurn = {
@@ -152,6 +178,7 @@ type ReadyTurn = {
   readonly maxToolRounds: number;
   readonly productMatchThreshold: number | undefined;
   readonly maxProductCandidates: number | undefined;
+  readonly contextWindowTokens: number;
   readonly dependencies: SupportTurnDependencies;
 };
 
@@ -184,15 +211,19 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     maxToolRounds,
     productMatchThreshold: input.productMatchThreshold,
     maxProductCandidates: input.maxProductCandidates,
+    contextWindowTokens: input.contextWindowTokens ?? contextWindowTokens,
     dependencies: input.dependencies,
   });
+  const seeded = [...seedSupportMessages(input.priorMessages, customerText)];
   const state = await graph.invoke(
     {
-      messages: [...seedSupportMessages(input.priorMessages, customerText)],
+      messages: seeded,
+      summary: input.priorSummary ?? "",
+      lineages: seedLineages(input.priorSequences, seeded.length),
       unmatchedOrderCount: streak.streak,
     },
     {
-      recursionLimit: maxToolRounds * 2 + 1,
+      recursionLimit: maxToolRounds * 2 + 2,
       signal: input.signal,
       configurable: { thread_id: sessionId },
     },
@@ -207,14 +238,17 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     toolTraces: state.toolTraces,
     unmatchedOrderCount: state.unmatchedOrderCount,
     handoffDraft: heldDraft(state.heldHandoff),
+    contextSummary: savedSummary(state, input.priorSummary ?? ""),
   };
 }
 
 function compileSupportGraph(ready: ReadyTurn) {
   return new StateGraph(TurnState)
+    .addNode("summarize", (state: TurnChannels) => summarizeNode(state, ready))
     .addNode("agent", (state: TurnChannels) => agentNode(state, ready))
     .addNode("tools", (state: TurnChannels) => toolsNode(state, ready))
-    .addEdge(START, "agent")
+    .addEdge(START, "summarize")
+    .addEdge("summarize", "agent")
     .addConditionalEdges("agent", (state: TurnChannels) => routeAfterAgent(state, ready), [
       "tools",
       END,
@@ -226,11 +260,30 @@ function compileSupportGraph(ready: ReadyTurn) {
     .compile();
 }
 
+async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
+  throwIfAborted(ready.signal);
+  const summarize = ready.model.summarize?.bind(ready.model);
+  const compacted = await compactHistory({
+    systemPrompt: supportSystemPrompt,
+    messages: compactMessages(state),
+    runningSummary: runningSummary(state.summary),
+    windowTokens: ready.contextWindowTokens,
+    summarize: summarize ?? (async () => {
+      throw new SupportTurnRejected("summary model is unavailable");
+    }),
+  });
+  throwIfAborted(ready.signal);
+  return {
+    summary: compacted.summary?.summary ?? "",
+    keptFrom: compacted.keptFrom,
+  };
+}
+
 async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
   const reply = await ready.model.complete({
-    systemPrompt: supportSystemPrompt,
-    messages: state.messages,
+    systemPrompt: systemPromptWithSummary(state.summary),
+    messages: state.messages.slice(state.keptFrom),
   });
   throwIfAborted(ready.signal);
   const parsed = replySchema.safeParse(reply);
@@ -379,6 +432,45 @@ function heldDraft(held: HeldHandoff): HandoffDraft | undefined {
       return unexpected;
     }
   }
+}
+
+function seedLineages(sequences: readonly number[] | undefined, length: number): number[] {
+  return Array.from({ length }, (_item, index) => sequences?.[index] ?? -1);
+}
+
+function compactMessages(state: TurnChannels): CompactMessage[] {
+  return state.messages.map((message, index) => ({
+    id: messageId(state.lineages[index], index),
+    role: message.role,
+    content: message.content,
+  }));
+}
+
+function messageId(sequence: number | undefined, index: number): string {
+  if (sequence === undefined || sequence < 0) return `live:${index}`;
+  return `seq:${sequence}`;
+}
+
+function runningSummary(summary: string): RunningSummary | null {
+  if (summary.length === 0) return null;
+  return { summary, summarizedIds: [] };
+}
+
+function systemPromptWithSummary(summary: string): string {
+  if (summary.length === 0) return supportSystemPrompt;
+  return `${supportSystemPrompt}\n\nSummary of the conversation so far: ${summary}`;
+}
+
+function savedSummary(
+  state: TurnChannels,
+  priorSummary: string,
+): { readonly summary: string; readonly coveredThrough: number } | null {
+  if (state.keptFrom === 0 || state.summary.length === 0 || state.summary === priorSummary) return null;
+  const coveredThrough = state.lineages
+    .slice(0, state.keptFrom)
+    .reduce((highest, sequence) => (sequence > highest ? sequence : highest), 0);
+  if (coveredThrough === 0) return null;
+  return { summary: state.summary, coveredThrough };
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

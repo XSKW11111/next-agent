@@ -152,7 +152,7 @@ test("the adapter sends the bearer token and model and maps a tool call", async 
   });
 });
 
-test("drops older user and assistant messages when the body is over the hard budget", async () => {
+test("keeps older turns when the body fits in the context window", async () => {
   let seenBody: unknown;
   const fetchImpl: typeof fetch = async (_url, init) => {
     seenBody = JSON.parse(String(init?.body));
@@ -177,11 +177,7 @@ test("drops older user and assistant messages when the body is over the hard bud
     },
   ];
 
-  // 300 sits above the system prompt, tools, and this turn, and below that body plus the older turn.
-  const reply = await openRouterModel(
-    { ...config, contextHardTokens: 300 },
-    fetchImpl,
-  ).complete({
+  const reply = await openRouterModel(config, fetchImpl).complete({
     systemPrompt: "You help customers.",
     messages,
   });
@@ -207,6 +203,8 @@ test("drops older user and assistant messages when the body is over the hard bud
     model: "openai/gpt-4o",
     messages: [
       { role: "system", content: "You help customers." },
+      { role: "user", content: "I ordered a kettle last week." },
+      { role: "assistant", content: "I can look up that kettle order." },
       { role: "user", content: "Where is my order?" },
       {
         role: "assistant",
@@ -288,28 +286,22 @@ test("drops older user and assistant messages when the body is over the hard bud
   });
 });
 
-test("does not fetch when the protected suffix exceeds the hard budget", async () => {
+test("sends a long user message that still fits in the context window", async () => {
   let calls = 0;
   const fetchImpl: typeof fetch = async () => {
     calls += 1;
     return Response.json({
-      choices: [{ message: { content: "This should not be sent." } }],
+      choices: [{ message: { content: "Received." } }],
     });
   };
 
-  let thrown: unknown;
-  try {
-    await openRouterModel({ ...config, contextHardTokens: 300 }, fetchImpl).complete({
-      systemPrompt: "You help customers.",
-      messages: [{ role: "user", content: "x".repeat(4000) }],
-    });
-  } catch (error) {
-    thrown = error;
-  }
+  const reply = await openRouterModel(config, fetchImpl).complete({
+    systemPrompt: "You help customers.",
+    messages: [{ role: "user", content: "x".repeat(4000) }],
+  });
 
-  expect(calls).toBe(0);
-  if (!(thrown instanceof Error)) throw new Error("expected the completion to throw");
-  expect(thrown.message).toBe("context hard cap exceeded");
+  expect(calls).toBe(1);
+  expect(reply).toEqual({ text: "Received." });
 });
 
 test("a 401 with debug details off omits the response body", async () => {

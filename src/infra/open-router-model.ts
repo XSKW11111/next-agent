@@ -1,6 +1,7 @@
 import { getEncoding } from "js-tiktoken";
 import { z } from "zod";
 import type { AgentConfig } from "./agent-config";
+import { contextWindowTokens } from "@/service/agent/context-summary";
 import type { ScriptedModel, ScriptedReply, SupportMessage } from "@/service/agent/support-turn";
 
 // cl100k_base is our count. DeepSeek's tokenizer can disagree, and the hard budget stays below the window so that gap is slack.
@@ -120,11 +121,30 @@ export class ContextBudgetExceeded extends Error {
 
 export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): ScriptedModel {
   return {
+    async summarize(prompt) {
+      const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.openRouterApiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 20_000,
+        }),
+      });
+      if (!response.ok) {
+        throw await failedResponse(response, config.debugToolDetails);
+      }
+      const reply = await readReply(response, config.debugToolDetails);
+      return reply.text;
+    },
     async complete(input) {
       const messages = fitContext(
         toChatMessages(input.systemPrompt, input.messages),
         tools,
-        config.contextHardTokens,
+        contextWindowTokens,
       );
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
