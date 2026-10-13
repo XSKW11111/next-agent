@@ -3,6 +3,7 @@ import { liveChatRuntime } from "@/infra/live-runtime";
 import type { Session, SessionId } from "../../../domain/session";
 import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
 import type { ProposalStore } from "../../../service/business/handoff/handoff";
+import type { ToolCardStore } from "../../../service/tool/customer-tool-cards";
 import type { MessageStore } from "../../../service/turn/message-store";
 
 export type SessionStore = {
@@ -15,6 +16,7 @@ export type ChatRuntime = {
   readonly sessions: SessionStore;
   readonly messages: MessageStore;
   readonly proposals: ProposalStore;
+  readonly toolCards: ToolCardStore;
   readonly model: ScriptedModel;
   readonly dependencies: SupportTurnDependencies;
   readonly newSessionId: () => string;

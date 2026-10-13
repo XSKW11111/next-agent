@@ -8,6 +8,7 @@ import { createAgentSupabase } from "@/infra/supabase";
 import { openRouterEmbedder, supabaseEarlyRisers, supabaseOrderCatalog, supabaseProductCatalog } from "@/infra/supabase-catalog";
 import { supabaseMessages, supabaseSessions, supabaseStreaks } from "@/infra/supabase-support";
 import type { ProposalStore } from "@/service/business/handoff/handoff";
+import { memoryToolCardStore } from "@/service/tool/customer-tool-cards";
 
 const placeholderSessionId = "00000000-0000-4000-8000-000000000000";
 
@@ -26,6 +27,7 @@ export function liveChatRuntime(
     sessions: supabaseSessions(client),
     messages: supabaseMessages(client),
     proposals,
+    toolCards: memoryToolCardStore(),
     model: openRouterModel(parsed.value, fetchImpl ?? fetch),
     dependencies: {
       orders: {

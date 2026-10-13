@@ -1,5 +1,6 @@
 import { parseTurn, type Turn } from "../../domain/turn";
 import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "../agent/support-turn";
+import { customerToolCards, type ToolCardStore } from "../tool/customer-tool-cards";
 import type { MessageStore, TurnMessage } from "./message-store";
 import { priorSupportMessages } from "./prior-messages";
 
@@ -15,6 +16,7 @@ export type SubmitTurnInput = {
   readonly messages: MessageStore;
   readonly model: ScriptedModel;
   readonly dependencies: SupportTurnDependencies;
+  readonly toolCards?: ToolCardStore;
   readonly maxToolRounds?: number;
   readonly productMatchThreshold?: number;
   readonly maxProductCandidates?: number;
@@ -85,6 +87,11 @@ async function saveNewTurn(input: SubmitTurnInput, turn: Turn): Promise<SubmitTu
     role: "assistant",
     content: completion.draft,
   });
+
+  if (input.toolCards !== undefined) {
+    const cards = customerToolCards(completion.toolPayloads);
+    if (cards.length > 0) input.toolCards.save(turn.sessionId, turn.id, cards);
+  }
 
   return { kind: "reply", reply: completion.draft };
 }

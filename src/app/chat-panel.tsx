@@ -1,35 +1,24 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, type UIMessage } from "ai";
+import { DefaultChatTransport } from "ai";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import type { Proposal } from "../domain/handoff";
+import type { CustomerToolCard } from "../service/tool/customer-tool-cards";
 import { ChatCard } from "./chat/chat-card";
 import { ChatComposer } from "./chat/chat-composer";
 import { ChatHeading } from "./chat/chat-heading";
 import { ChatShell } from "./chat/chat-shell";
 import { ChatTranscript } from "./chat/chat-transcript";
 import { sendAllowed } from "./chat/send-allowed";
+import { historyMessages, type ChatMessage, type HistoryBody } from "./history-messages";
 
 const HandoffCard = dynamic(() => import("./handoff-card").then((mod) => mod.HandoffCard), { ssr: false });
+const ToolCards = dynamic(() => import("./tool-cards").then((mod) => mod.ToolCards), { ssr: false });
 
 const sessionKey = "next-agent-session-id";
-
-type StoredMessage = {
-  turnId: string;
-  role: "customer" | "assistant";
-  content: string;
-  sequence: number;
-};
-
-type HistoryBody = {
-  messages: StoredMessage[];
-  proposals: Proposal[];
-};
-
-type ChatMessage = UIMessage<unknown, { proposal: Proposal }>;
 
 export function ChatPanel() {
   const stored = useSyncExternalStore(subscribeSession, readSession, () => null);
@@ -197,6 +186,7 @@ function ChatLayout({
           {notice === undefined ? null : <p className="text-sm text-muted">{notice}</p>}
           {messages.length === 0 ? <p className="text-sm text-muted">Ask about an order, a product, or a person.</p> : null}
           {messages.map((message) => {
+            const cards = toolCardsOf(message);
             const proposal = proposalOf(message);
             const align = message.role === "user" ? "end" : "start";
             return (
@@ -207,6 +197,11 @@ function ChatLayout({
                     {textFrom(message)}
                   </BubbleContent>
                 </Bubble>
+                {cards === undefined ? null : (
+                  <div className="w-full max-w-[80%] self-start">
+                    <ToolCards cards={cards} />
+                  </div>
+                )}
                 {proposal === undefined || sessionId === null ? null : (
                   <div className="w-full max-w-[80%] self-start">
                     <HandoffCard
@@ -232,6 +227,12 @@ function proposalOf(message: ChatMessage): Proposal | undefined {
   return part.data;
 }
 
+function toolCardsOf(message: ChatMessage): CustomerToolCard[] | undefined {
+  const part = message.parts.find((candidate) => candidate.type === "data-tool-cards");
+  if (part === undefined || part.type !== "data-tool-cards") return undefined;
+  return part.data;
+}
+
 function pendingMessage(text: string): ChatMessage {
   return { id: "pending", role: "user", parts: [{ type: "text", text }] };
 }
@@ -240,24 +241,6 @@ function textFrom(message: ChatMessage): string {
   return message.parts
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("");
-}
-
-function historyMessages(body: HistoryBody): ChatMessage[] {
-  const proposalsByTurn = new Map(body.proposals.map((proposal) => [String(proposal.turnId), proposal]));
-  return [...body.messages]
-    .sort((left, right) => left.sequence - right.sequence)
-    .map((message) => {
-      const proposal = message.role === "assistant" ? proposalsByTurn.get(message.turnId) : undefined;
-      const parts: ChatMessage["parts"] = [{ type: "text", text: message.content }];
-      if (proposal !== undefined) {
-        parts.push({ type: "data-proposal", data: proposal });
-      }
-      return {
-        id: `${message.turnId}:${message.role}`,
-        role: message.role === "customer" ? "user" : "assistant",
-        parts,
-      };
-    });
 }
 
 function subscribeSession(): () => void {

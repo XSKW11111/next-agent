@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { AgentConfig } from "@/infra/agent-config";
+import { orderNumberSchema } from "../../../domain/order";
 import { parse, type Parsed } from "../../../domain/parse";
 import {
   sessionIdSchema,
@@ -10,10 +11,11 @@ import {
 import { parseTurn } from "../../../domain/turn";
 import type { Proposal, SupportCase } from "../../../domain/handoff";
 import { captureHandoff, type ProposalStore } from "../../../service/business/handoff/handoff";
-import type { OrderCatalog, OrderStreakStore } from "../../../service/business/order/lookup-order";
+import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../../../service/business/order/lookup-order";
 import type { ProductSearchDependencies } from "../../../service/business/product/search-products";
 import type { EarlyRisersCodeStore } from "../../../service/business/promotion/claim-early-risers";
-import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
+import type { ScriptedModel, SupportMessage, SupportTurnDependencies } from "../../../service/agent/support-turn";
+import { memoryToolCardStore } from "../../../service/tool/customer-tool-cards";
 import type { MessageStore, SequenceUpdate, TurnMessage } from "../../../service/turn/message-store";
 import { POST as createSession } from "./sessions/route";
 import { GET as readMessages, POST as sendMessage } from "./sessions/[id]/messages/route";
@@ -148,7 +150,81 @@ test("GET /api/chat/sessions/:id/messages returns the stored messages", async ()
       assistantRow(2, turnId, "On the way."),
     ],
     proposals: [],
+    toolCards: [],
   });
+});
+
+test("a saved tool card survives a second read and a later turn has no tool role", async () => {
+  const seen: SupportMessage[][] = [];
+  const model: ScriptedModel = {
+    async complete(input) {
+      seen.push([...input.messages]);
+      const latest = input.messages.at(-1);
+      if (latest?.role === "tool") return { text: "Order #W002 is shipped." };
+      if (latest?.role === "user" && latest.content === "thanks") return { text: "You are welcome." };
+      return {
+        text: "Looking it up.",
+        toolCalls: [
+          {
+            id: "lookup-1",
+            name: "lookup_order",
+            args: { email: "ada@example.com", order_number: "W002" },
+          },
+        ],
+      };
+    },
+  };
+  const runtime = await startedRuntime(model, [shippedCatalogOrder()]);
+  const card = {
+    kind: "orders" as const,
+    orders: [
+      {
+        orderNumber: "#W002",
+        status: "shipped",
+        trackingUrl: "https://track.example/1Z",
+      },
+    ],
+  };
+
+  const first = await sendMessage(
+    jsonRequest({ turnId, text: "where is order W002" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const replay = await sendMessage(
+    jsonRequest({ turnId, text: "where is order W002" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+
+  expect(first.status).toBe(200);
+  expect(await replyText(first)).toBe("Order #W002 is shipped.");
+  expect(await toolCardData(first)).toEqual([card]);
+  expect(replay.status).toBe(200);
+  expect(await toolCardData(replay)).toEqual([card]);
+  expect(seen).toHaveLength(2);
+
+  const listed = {
+    messages: [
+      customerRow(1, turnId, "where is order W002"),
+      assistantRow(2, turnId, "Order #W002 is shipped."),
+    ],
+    proposals: [],
+    toolCards: [{ turnId, cards: [card] }],
+  };
+  const read = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+  const again = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+  expect(await read.json()).toEqual(listed);
+  expect(await again.json()).toEqual(listed);
+
+  const laterTurnId = "44444444-4444-4444-8444-444444444444";
+  await sendMessage(jsonRequest({ turnId: laterTurnId, text: "thanks" }), sessionContext(sessionId), runtime);
+
+  expect(seen[2]).toEqual([
+    { role: "user", content: "where is order W002" },
+    { role: "assistant", content: "Order #W002 is shipped.", toolCalls: [] },
+    { role: "user", content: "thanks" },
+  ]);
 });
 
 test("a handoff turn streams the reply and the pending proposal", async () => {
@@ -231,6 +307,11 @@ async function proposalData(response: Response): Promise<unknown> {
   return events.find((event) => event.type === "data-proposal")?.data;
 }
 
+async function toolCardData(response: Response): Promise<unknown> {
+  const events = await streamEvents(response.clone());
+  return events.find((event) => event.type === "data-tool-cards")?.data;
+}
+
 async function streamEvents(response: Response): Promise<Array<{ type: string; delta?: string; data?: unknown }>> {
   const body = await response.text();
   const events: Array<{ type: string; delta?: string; data?: unknown }> = [];
@@ -266,8 +347,8 @@ function handoffContext(id: string, proposal: string) {
   return { params: Promise.resolve({ id, proposalId: proposal }) };
 }
 
-async function startedRuntime(model: ScriptedModel): Promise<TestRuntime> {
-  const runtime = chatRuntime([sessionId], model);
+async function startedRuntime(model: ScriptedModel, orders: readonly CatalogOrder[] = []): Promise<TestRuntime> {
+  const runtime = chatRuntime([sessionId], model, orders);
   const created = await createSession(jsonRequest({}), undefined, runtime);
   expect(created.status).toBe(200);
   return runtime;
@@ -279,7 +360,11 @@ type TestRuntime = ChatRuntime & {
   proposals: ProposalStore & { cases(): SupportCase[] };
 };
 
-function chatRuntime(ids: readonly string[], model: ScriptedModel = replyModel({ count: 0 }, "On the way.")): TestRuntime {
+function chatRuntime(
+  ids: readonly string[],
+  model: ScriptedModel = replyModel({ count: 0 }, "On the way."),
+  orders: readonly CatalogOrder[] = [],
+): TestRuntime {
   const remaining = [...ids];
   const proposals = fakeProposalStore();
   return {
@@ -287,8 +372,9 @@ function chatRuntime(ids: readonly string[], model: ScriptedModel = replyModel({
     sessions: memorySessions(),
     messages: memoryMessages(),
     proposals,
+    toolCards: memoryToolCardStore(),
     model,
-    dependencies: dependencies(proposals),
+    dependencies: dependencies(proposals, orders),
     newSessionId() {
       const id = remaining.shift();
       if (id === undefined) throw new Error("test fixture ran out of session ids");
@@ -412,12 +498,21 @@ function fakeProposalStore(): ProposalStore & { cases(): SupportCase[] } {
   };
 }
 
-function dependencies(proposals: ProposalStore): SupportTurnDependencies {
+function shippedCatalogOrder(): CatalogOrder {
+  return {
+    orderNumber: parsed(parse(orderNumberSchema, "W002")),
+    status: "shipped",
+    trackingNumber: "1Z",
+  };
+}
+
+function dependencies(proposals: ProposalStore, orders: readonly CatalogOrder[] = []): SupportTurnDependencies {
   return {
     orders: {
       catalog: {
-        async listOrdersForEmail() {
-          return { kind: "ready", orders: [] };
+        async listOrdersForEmail(email) {
+          if (orders.length === 0 || email !== "ada@example.com") return { kind: "ready", orders: [] };
+          return { kind: "ready", orders };
         },
       } satisfies OrderCatalog,
       streaks: {
