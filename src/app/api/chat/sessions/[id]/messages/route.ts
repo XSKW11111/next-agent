@@ -2,6 +2,7 @@ import { z } from "zod";
 import { sessionIdSchema, type SessionId } from "../../../../../../domain/session";
 import { parseTurn } from "../../../../../../domain/turn";
 import { submitTurn, type SubmitTurnResult } from "../../../../../../service/turn/submit-turn";
+import type { CustomerToolCard } from "../../../../../../service/tool/customer-tool-cards";
 import { currentChatRuntime, type ChatRuntime } from "../../../runtime";
 import { uiMessageStreamResponse } from "../../../ui-message-stream";
 
@@ -63,8 +64,13 @@ export async function POST(
         proposalId: existing?.id ?? crypto.randomUUID(),
       },
     },
+    toolCards: runtime.toolCards,
   });
-  return turnResponse(result, runtime.proposals.findProposalForTurn(session.id, turn.value.id));
+  return turnResponse(
+    result,
+    runtime.proposals.findProposalForTurn(session.id, turn.value.id),
+    runtime.toolCards.findForTurn(session.id, turn.value.id),
+  );
 }
 
 export async function GET(
@@ -80,13 +86,18 @@ export async function GET(
   return Response.json({
     messages: [...messages].sort((left, right) => left.sequence - right.sequence),
     proposals: runtime.proposals.listProposals(sessionId.value),
+    toolCards: runtime.toolCards.listForSession(sessionId.value),
   });
 }
 
-function turnResponse(result: SubmitTurnResult, proposal: ReturnType<ChatRuntime["proposals"]["findProposalForTurn"]>): Response {
+function turnResponse(
+  result: SubmitTurnResult,
+  proposal: ReturnType<ChatRuntime["proposals"]["findProposalForTurn"]>,
+  toolCards: readonly CustomerToolCard[] | undefined,
+): Response {
   switch (result.kind) {
     case "reply":
-      return uiMessageStreamResponse(result.reply, proposal);
+      return uiMessageStreamResponse(result.reply, proposal, toolCards);
     case "rejected":
       return Response.json({ code: "rejected" }, { status: 409 });
     case "already_submitted":
