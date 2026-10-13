@@ -19,3 +19,10 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Cursor Cloud specific instructions
+
+- Install dependencies with `npm ci`. The dev server is `npm run dev -- --hostname 0.0.0.0 --port 3000`.
+- `npm run typecheck`, `npm test`, and `npm run build` do not need API keys. `GET /api/health` returns `{ "ok": true }` without them.
+- Creating a chat session needs the variables in `.env.example` (`OPENROUTER_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and the listed defaults). Without them, `/` still renders and shows that the session could not be started.
+- `npm run lint` fails on an existing `react-hooks/immutability` error in `src/app/chat-panel.tsx` (`sentQueued`).
