@@ -152,6 +152,166 @@ test("the adapter sends the bearer token and model and maps a tool call", async 
   });
 });
 
+test("drops older user and assistant messages when the body is over the hard budget", async () => {
+  let seenBody: unknown;
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    seenBody = JSON.parse(String(init?.body));
+    return Response.json({
+      choices: [{ message: { content: "The kettle is on the way." } }],
+    });
+  };
+  const messages = [
+    { role: "user" as const, content: "I ordered a kettle last week." },
+    { role: "assistant" as const, content: "I can look up that kettle order.", toolCalls: [] as const },
+    { role: "user" as const, content: "Where is my order?" },
+    {
+      role: "assistant" as const,
+      content: "Looking it up.",
+      toolCalls: [{ id: "lookup-1", name: "lookup_order" as const, args: { email: "ada@example.com" } }],
+    },
+    {
+      role: "tool" as const,
+      toolCallId: "lookup-1",
+      name: "lookup_order" as const,
+      content: "{\"kind\":\"orders_found\"}",
+    },
+  ];
+
+  // 300 sits above the system prompt, tools, and this turn, and below that body plus the older turn.
+  const reply = await openRouterModel(
+    { ...config, contextHardTokens: 300 },
+    fetchImpl,
+  ).complete({
+    systemPrompt: "You help customers.",
+    messages,
+  });
+
+  expect(reply).toEqual({ text: "The kettle is on the way." });
+  expect(messages).toEqual([
+    { role: "user", content: "I ordered a kettle last week." },
+    { role: "assistant", content: "I can look up that kettle order.", toolCalls: [] },
+    { role: "user", content: "Where is my order?" },
+    {
+      role: "assistant",
+      content: "Looking it up.",
+      toolCalls: [{ id: "lookup-1", name: "lookup_order", args: { email: "ada@example.com" } }],
+    },
+    {
+      role: "tool",
+      toolCallId: "lookup-1",
+      name: "lookup_order",
+      content: "{\"kind\":\"orders_found\"}",
+    },
+  ]);
+  expect(seenBody).toEqual({
+    model: "openai/gpt-4o",
+    messages: [
+      { role: "system", content: "You help customers." },
+      { role: "user", content: "Where is my order?" },
+      {
+        role: "assistant",
+        content: "Looking it up.",
+        tool_calls: [
+          {
+            id: "lookup-1",
+            type: "function",
+            function: {
+              name: "lookup_order",
+              arguments: "{\"email\":\"ada@example.com\"}",
+            },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "lookup-1", content: "{\"kind\":\"orders_found\"}" },
+    ],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "lookup_order",
+          parameters: {
+            type: "object",
+            properties: {
+              email: { type: "string" },
+              order_number: { type: "string" },
+            },
+            required: ["email"],
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_products",
+          parameters: {
+            type: "object",
+            properties: {
+              mode: { type: "string", enum: ["semantic", "list"] },
+              query: { type: "string" },
+              filters: { type: "object" },
+            },
+            required: ["mode"],
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "claim_early_risers",
+          parameters: {
+            type: "object",
+            properties: { request: { type: "string" } },
+            required: ["request"],
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "capture_handoff",
+          parameters: {
+            type: "object",
+            properties: {
+              contact_email: { type: "string" },
+              reason: { type: "string" },
+              order_number: { type: "string" },
+            },
+            required: ["contact_email", "reason"],
+            additionalProperties: false,
+          },
+        },
+      },
+    ],
+  });
+});
+
+test("does not fetch when the protected suffix exceeds the hard budget", async () => {
+  let calls = 0;
+  const fetchImpl: typeof fetch = async () => {
+    calls += 1;
+    return Response.json({
+      choices: [{ message: { content: "This should not be sent." } }],
+    });
+  };
+
+  let thrown: unknown;
+  try {
+    await openRouterModel({ ...config, contextHardTokens: 300 }, fetchImpl).complete({
+      systemPrompt: "You help customers.",
+      messages: [{ role: "user", content: "x".repeat(4000) }],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(calls).toBe(0);
+  if (!(thrown instanceof Error)) throw new Error("expected the completion to throw");
+  expect(thrown.message).toBe("context hard cap exceeded");
+});
+
 test("a 401 with debug details off omits the response body", async () => {
   const fetchImpl: typeof fetch = async () =>
     new Response("upstream-body-should-stay-hidden", { status: 401 });

@@ -39,6 +39,46 @@ describe("parseAgentConfig", () => {
     expect(parsed).toEqual({ ok: false, names: ["OPENROUTER_API_KEY"] });
   });
 
+  test("uses 120000 when CONTEXT_HARD_TOKENS is missing and the window is larger", () => {
+    const env: Record<string, string> = { ...validEnv };
+    delete env.CONTEXT_HARD_TOKENS;
+    const parsed = parseAgentConfig(env);
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        openRouterApiKey: "test-key",
+        model: "openai/gpt-4o",
+        supabaseUrl: "https://example.supabase.co",
+        supabaseServiceRoleKey: "test-service-role",
+        productMatchThreshold: 0.3,
+        maxProductCandidates: 5,
+        maxToolRounds: 6,
+        contextWindowTokens: 128000,
+        contextHardTokens: 120000,
+        debugToolDetails: false,
+      },
+    });
+  });
+
+  test("a set hard budget replaces the default", () => {
+    const parsed = parseAgentConfig({ ...validEnv, CONTEXT_HARD_TOKENS: "100000" });
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        openRouterApiKey: "test-key",
+        model: "openai/gpt-4o",
+        supabaseUrl: "https://example.supabase.co",
+        supabaseServiceRoleKey: "test-service-role",
+        productMatchThreshold: 0.3,
+        maxProductCandidates: 5,
+        maxToolRounds: 6,
+        contextWindowTokens: 128000,
+        contextHardTokens: 100000,
+        debugToolDetails: false,
+      },
+    });
+  });
+
   test("rejects a hard budget that is not below the window", () => {
     const larger = parseAgentConfig({
       ...validEnv,
@@ -48,8 +88,12 @@ describe("parseAgentConfig", () => {
       ...validEnv,
       CONTEXT_HARD_TOKENS: "128000",
     });
+    const env: Record<string, string> = { ...validEnv, CONTEXT_WINDOW_TOKENS: "120000" };
+    delete env.CONTEXT_HARD_TOKENS;
+    const defaultNotBelowWindow = parseAgentConfig(env);
     expect(larger).toEqual({ ok: false, names: ["CONTEXT_HARD_TOKENS"] });
     expect(equal).toEqual({ ok: false, names: ["CONTEXT_HARD_TOKENS"] });
+    expect(defaultNotBelowWindow).toEqual({ ok: false, names: ["CONTEXT_HARD_TOKENS"] });
   });
 
   test("rejects more than 12 tool rounds", () => {
