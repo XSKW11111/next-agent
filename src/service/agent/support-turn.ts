@@ -9,7 +9,12 @@ import {
 } from "../../domain/session";
 import { finalizeSupportAnswer } from "../answer/finalize-support-answer";
 import { runToolRound, type ToolCall, type ToolName } from "../tool/run-tool-round";
-import { maxCallsPerChunk, skippedChecksSentence } from "../tool/tool-chunk-plan";
+import type { SupportTurnTraceChunkPlan } from "../../domain/support-turn-trace";
+import {
+  maxCallsPerChunk,
+  planToolChunk,
+  skippedChecksSentence,
+} from "../tool/tool-chunk-plan";
 import { runSupportTool, type SupportToolDependencies } from "../tool/support-tools";
 import type { StoredSupportMessage } from "../turn/prior-messages";
 import {
@@ -96,6 +101,7 @@ export type TurnCompletion = {
   readonly toolPayloads: readonly unknown[];
   readonly toolTraces: readonly ToolTrace[];
   readonly skippedCalls: readonly SkippedToolCall[];
+  readonly chunkPlans: readonly SupportTurnTraceChunkPlan[];
   readonly unmatchedOrderCount: UnmatchedOrderStreak;
   readonly handoffDraft: HandoffDraft | undefined;
   readonly contextSummary: { readonly summary: string; readonly coveredThrough: number } | null;
@@ -130,6 +136,7 @@ type TurnChannels = {
   pendingQueue: ModelToolCall[];
   toolPayloads: unknown[];
   toolTraces: ToolTrace[];
+  chunkPlans: SupportTurnTraceChunkPlan[];
   unmatchedOrderCount: UnmatchedOrderStreak;
   heldHandoff: HeldHandoff;
   summary: string;
@@ -159,6 +166,10 @@ const TurnState = Annotation.Root({
     default: () => [],
   }),
   toolTraces: Annotation<ToolTrace[]>({
+    reducer: (left, right) => left.concat(right),
+    default: () => [],
+  }),
+  chunkPlans: Annotation<SupportTurnTraceChunkPlan[]>({
     reducer: (left, right) => left.concat(right),
     default: () => [],
   }),
@@ -259,6 +270,7 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     toolPayloads: state.toolPayloads,
     toolTraces: state.toolTraces,
     skippedCalls,
+    chunkPlans: state.chunkPlans,
     unmatchedOrderCount: state.unmatchedOrderCount,
     handoffDraft: heldDraft(state.heldHandoff),
     contextSummary: savedSummary(state, input.priorSummary ?? ""),
@@ -340,6 +352,8 @@ async function toolsNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
   const chunk = state.pendingQueue.slice(0, maxCallsPerChunk);
   if (chunk.length === 0) throw new SupportTurnRejected("tools node has no calls");
 
+  const plan = planToolChunk(chunk.map((call) => call.name));
+  const chunkPlan = toTraceChunkPlan(state.toolRounds, chunk, plan);
   const calls: ToolCall<unknown>[] = chunk.map((call) => ({
     tool: call.name,
     run: () => runCall(call, ready),
@@ -371,8 +385,35 @@ async function toolsNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
     toolRounds: state.toolRounds + 1,
     toolPayloads: [...round.results],
     toolTraces: chunk.map((call) => ({ callId: call.id, tool: call.name })),
+    chunkPlans: [chunkPlan],
     unmatchedOrderCount: latestUnmatched(round.results, state.unmatchedOrderCount),
     heldHandoff: firstHandoff(round.results),
+  };
+}
+
+function toTraceChunkPlan(
+  chunkIndex: number,
+  chunk: readonly ModelToolCall[],
+  plan: ReturnType<typeof planToolChunk>,
+): SupportTurnTraceChunkPlan {
+  return {
+    chunkIndex,
+    calls: plan.calls.map((step) => {
+      const call = chunk[step.index];
+      if (call === undefined) throw new SupportTurnRejected("chunk plan names a missing call");
+      return { callId: call.id, tool: call.name, kind: step.effect };
+    }),
+    parallelReadCallIds: plan.calls.flatMap((step) => {
+      if (step.effect !== "read") return [];
+      const call = chunk[step.index];
+      if (call === undefined) throw new SupportTurnRejected("chunk plan names a missing call");
+      return [call.id];
+    }),
+    writeOrderCallIds: plan.writeOrder.map((index) => {
+      const call = chunk[index];
+      if (call === undefined) throw new SupportTurnRejected("chunk plan names a missing call");
+      return call.id;
+    }),
   };
 }
 
