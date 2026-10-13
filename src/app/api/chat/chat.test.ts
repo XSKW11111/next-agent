@@ -92,6 +92,53 @@ test("the same turn id and the same text returns the saved reply", async () => {
   expect(calls.count).toBe(1);
 });
 
+test("nine product searches store one assistant reply and a retry does not run them again", async () => {
+  const calls = { count: 0 };
+  const model: ScriptedModel = {
+    async complete(input) {
+      calls.count += 1;
+      if (input.messages.some((message) => message.role === "tool")) {
+        return { text: "Nine products are listed." };
+      }
+      return {
+        text: "Checking nine products.",
+        toolCalls: Array.from({ length: 9 }, (_item, index) => ({
+          id: `search-${index + 1}`,
+          name: "search_products" as const,
+          args: { mode: "list" as const },
+        })),
+      };
+    },
+  };
+  const runtime = await startedRuntime(model, [], listingProducts());
+
+  const first = await sendMessage(
+    jsonRequest({ turnId, text: "list nine products" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const second = await sendMessage(
+    jsonRequest({ turnId, text: "list nine products" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const read = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+
+  expect(first.status).toBe(200);
+  expect(await replyText(first)).toBe("Nine products are listed.");
+  expect(second.status).toBe(200);
+  expect(await replyText(second)).toBe("Nine products are listed.");
+  expect(calls.count).toBe(2);
+  expect(await read.json()).toEqual({
+    messages: [
+      customerRow(1, turnId, "list nine products"),
+      assistantRow(2, turnId, "Nine products are listed."),
+    ],
+    proposals: [],
+    toolCards: [],
+  });
+});
+
 test("the same turn id with different text returns 409", async () => {
   const calls = { count: 0 };
   const runtime = await startedRuntime(replyModel(calls, "On the way."));
@@ -347,8 +394,12 @@ function handoffContext(id: string, proposal: string) {
   return { params: Promise.resolve({ id, proposalId: proposal }) };
 }
 
-async function startedRuntime(model: ScriptedModel, orders: readonly CatalogOrder[] = []): Promise<TestRuntime> {
-  const runtime = chatRuntime([sessionId], model, orders);
+async function startedRuntime(
+  model: ScriptedModel,
+  orders: readonly CatalogOrder[] = [],
+  products?: ProductSearchDependencies,
+): Promise<TestRuntime> {
+  const runtime = chatRuntime([sessionId], model, orders, products);
   const created = await createSession(jsonRequest({}), undefined, runtime);
   expect(created.status).toBe(200);
   return runtime;
@@ -364,6 +415,7 @@ function chatRuntime(
   ids: readonly string[],
   model: ScriptedModel = replyModel({ count: 0 }, "On the way."),
   orders: readonly CatalogOrder[] = [],
+  products?: ProductSearchDependencies,
 ): TestRuntime {
   const remaining = [...ids];
   const proposals = fakeProposalStore();
@@ -374,7 +426,7 @@ function chatRuntime(
     proposals,
     toolCards: memoryToolCardStore(),
     model,
-    dependencies: dependencies(proposals, orders),
+    dependencies: dependencies(proposals, orders, products),
     newSessionId() {
       const id = remaining.shift();
       if (id === undefined) throw new Error("test fixture ran out of session ids");
@@ -506,7 +558,43 @@ function shippedCatalogOrder(): CatalogOrder {
   };
 }
 
-function dependencies(proposals: ProposalStore, orders: readonly CatalogOrder[] = []): SupportTurnDependencies {
+function listingProducts(): ProductSearchDependencies {
+  return {
+    catalog: {
+      async matchProducts() {
+        return [];
+      },
+      async listProducts() {
+        return [];
+      },
+    },
+    embedder: {
+      async embed() {
+        return [];
+      },
+    },
+  };
+}
+
+function dependencies(
+  proposals: ProposalStore,
+  orders: readonly CatalogOrder[] = [],
+  products: ProductSearchDependencies = {
+    catalog: {
+      async matchProducts() {
+        throw new Error("search was not part of this turn");
+      },
+      async listProducts() {
+        throw new Error("search was not part of this turn");
+      },
+    },
+    embedder: {
+      async embed() {
+        throw new Error("search was not part of this turn");
+      },
+    },
+  },
+): SupportTurnDependencies {
   return {
     orders: {
       catalog: {
@@ -524,21 +612,7 @@ function dependencies(proposals: ProposalStore, orders: readonly CatalogOrder[] 
         },
       } satisfies OrderStreakStore,
     },
-    products: {
-      catalog: {
-        async matchProducts() {
-          throw new Error("search was not part of this turn");
-        },
-        async listProducts() {
-          throw new Error("search was not part of this turn");
-        },
-      },
-      embedder: {
-        async embed() {
-          throw new Error("search was not part of this turn");
-        },
-      },
-    } satisfies ProductSearchDependencies,
+    products,
     promotion: {
       session: {
         id: parsed(parse(sessionIdSchema, sessionId)),

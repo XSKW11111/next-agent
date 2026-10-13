@@ -44,6 +44,14 @@ _Avoid_: Shared inbox, multi-user chat
 One customer send in a session, identified by its turn id.
 _Avoid_: Operation, lease, request
 
+**Tool round**:
+The calls taken from one assistant reply, or from the still-waiting tail of that reply, and run before the assistant speaks again. One tool round runs at most 8 calls. Calls past that wait for a later tool round of the same turn. A check that does not fit in the remaining rounds does not run, and the reply names it.
+_Avoid_: A ninth call that runs none of the checks
+
+**Max tool rounds**:
+How many tool rounds one customer send may run. The default is 6, and a send may set it from 1 to 12. The spoken reply after those rounds is not another tool round.
+_Avoid_: A cap of 8 calls
+
 **Unmatched order streak**:
 The count of consecutive order lookups in a session that did not find the order. A lookup that finds the order ends the streak. An unavailable lookup leaves the streak unchanged. At two, the assistant may offer a person.
 _Avoid_: Failed order attempts, eligibility counter
