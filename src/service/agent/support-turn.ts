@@ -9,6 +9,7 @@ import {
 } from "../../domain/session";
 import { finalizeSupportAnswer } from "../answer/finalize-support-answer";
 import { runToolRound, type ToolCall, type ToolName } from "../tool/run-tool-round";
+import { maxCallsPerChunk, skippedChecksSentence } from "../tool/tool-chunk-plan";
 import { runSupportTool, type SupportToolDependencies } from "../tool/support-tools";
 import type { StoredSupportMessage } from "../turn/prior-messages";
 import {
@@ -82,12 +83,19 @@ export type ToolTrace = {
   readonly tool: ToolName;
 };
 
+export type SkippedToolCall = {
+  readonly callId: string;
+  readonly tool: ToolName;
+  readonly args: unknown;
+};
+
 export type HandoffDraft = HandoffResult["draft"];
 
 export type TurnCompletion = {
   readonly draft: string;
   readonly toolPayloads: readonly unknown[];
   readonly toolTraces: readonly ToolTrace[];
+  readonly skippedCalls: readonly SkippedToolCall[];
   readonly unmatchedOrderCount: UnmatchedOrderStreak;
   readonly handoffDraft: HandoffDraft | undefined;
   readonly contextSummary: { readonly summary: string; readonly coveredThrough: number } | null;
@@ -119,6 +127,7 @@ type TurnChannels = {
   messages: SupportMessage[];
   draft: string;
   toolRounds: number;
+  pendingQueue: ModelToolCall[];
   toolPayloads: unknown[];
   toolTraces: ToolTrace[];
   unmatchedOrderCount: UnmatchedOrderStreak;
@@ -140,6 +149,10 @@ const TurnState = Annotation.Root({
   toolRounds: Annotation<number>({
     reducer: (_left, right) => right,
     default: () => 0,
+  }),
+  pendingQueue: Annotation<ModelToolCall[]>({
+    reducer: (_left, right) => right,
+    default: () => [],
   }),
   toolPayloads: Annotation<unknown[]>({
     reducer: (left, right) => left.concat(right),
@@ -229,13 +242,23 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     },
   );
 
+  const finalized = finalizeSupportAnswer({
+    draft: state.draft,
+    toolPayloads: state.toolPayloads,
+  });
+  const skippedCalls = state.pendingQueue.map((call) => ({
+    callId: call.id,
+    tool: call.name,
+    args: call.args,
+  }));
   return {
-    draft: finalizeSupportAnswer({
-      draft: state.draft,
-      toolPayloads: state.toolPayloads,
-    }),
+    draft:
+      skippedCalls.length === 0
+        ? finalized
+        : `${finalized} ${skippedChecksSentence(skippedCalls)}`,
     toolPayloads: state.toolPayloads,
     toolTraces: state.toolTraces,
+    skippedCalls,
     unmatchedOrderCount: state.unmatchedOrderCount,
     handoffDraft: heldDraft(state.heldHandoff),
     contextSummary: savedSummary(state, input.priorSummary ?? ""),
@@ -254,6 +277,7 @@ function compileSupportGraph(ready: ReadyTurn) {
       END,
     ])
     .addConditionalEdges("tools", (state: TurnChannels) => routeAfterTools(state, ready), [
+      "tools",
       "agent",
       END,
     ])
@@ -301,25 +325,22 @@ async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
       },
     ],
     draft: parsed.data.text,
-    toolRounds: state.toolRounds + 1,
+    pendingQueue: toolCalls,
   };
 }
 
 function routeAfterAgent(state: TurnChannels, ready: ReadyTurn): "tools" | typeof END {
-  const latest = state.messages.at(-1);
-  if (latest?.role !== "assistant" || latest.toolCalls.length === 0) return END;
-  if (state.toolRounds > ready.maxToolRounds) return END;
+  if (state.pendingQueue.length === 0) return END;
+  if (state.toolRounds >= ready.maxToolRounds) return END;
   return "tools";
 }
 
 async function toolsNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
-  const latest = state.messages.at(-1);
-  if (latest?.role !== "assistant") {
-    throw new SupportTurnRejected("tools node has no assistant reply");
-  }
+  const chunk = state.pendingQueue.slice(0, maxCallsPerChunk);
+  if (chunk.length === 0) throw new SupportTurnRejected("tools node has no calls");
 
-  const calls: ToolCall<unknown>[] = latest.toolCalls.map((call) => ({
+  const calls: ToolCall<unknown>[] = chunk.map((call) => ({
     tool: call.name,
     run: () => runCall(call, ready),
   }));
@@ -336,7 +357,7 @@ async function toolsNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
   }
 
   return {
-    messages: latest.toolCalls.map((call, index) => {
+    messages: chunk.map((call, index) => {
       const payload = round.results[index];
       if (payload === undefined) throw new SupportTurnRejected("tool result is missing");
       return {
@@ -346,16 +367,19 @@ async function toolsNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
         content: JSON.stringify(payload),
       };
     }),
+    pendingQueue: state.pendingQueue.slice(maxCallsPerChunk),
+    toolRounds: state.toolRounds + 1,
     toolPayloads: [...round.results],
-    toolTraces: latest.toolCalls.map((call) => ({ callId: call.id, tool: call.name })),
+    toolTraces: chunk.map((call) => ({ callId: call.id, tool: call.name })),
     unmatchedOrderCount: latestUnmatched(round.results, state.unmatchedOrderCount),
     heldHandoff: firstHandoff(round.results),
   };
 }
 
-function routeAfterTools(state: TurnChannels, ready: ReadyTurn): "agent" | typeof END {
-  if (state.toolRounds >= ready.maxToolRounds) return END;
-  return "agent";
+function routeAfterTools(state: TurnChannels, ready: ReadyTurn): "tools" | "agent" | typeof END {
+  if (state.pendingQueue.length > 0 && state.toolRounds < ready.maxToolRounds) return "tools";
+  if (state.toolRounds < ready.maxToolRounds) return "agent";
+  return END;
 }
 
 function runCall(call: ModelToolCall, ready: ReadyTurn): Promise<unknown> {

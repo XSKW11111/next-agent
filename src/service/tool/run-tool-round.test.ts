@@ -111,7 +111,7 @@ test("capture_handoff calls run in emission order", async () => {
   expect(starts).toEqual(["first", "second"]);
 });
 
-test("mixed lanes return results in call order", async () => {
+test("writes run one at a time while a search starts without waiting", async () => {
   const starts: string[] = [];
   const order = gate<string>();
   const search = gate<string>();
@@ -163,14 +163,17 @@ test("mixed lanes return results in call order", async () => {
 
   const round = runToolRound(calls);
   await nextTurn();
-  expect(starts).toEqual(["lookup", "search", "handoff", "claim"]);
+  expect(starts).toEqual(["lookup", "search"]);
 
   search.open("products");
-  handoff.open("draft-1");
   await nextTurn();
-  expect(starts).toEqual(["lookup", "search", "handoff", "claim", "handoff-again"]);
+  expect(starts).toEqual(["lookup", "search"]);
 
   order.open("order-1");
+  await nextTurn();
+  expect(starts).toEqual(["lookup", "search", "lookup-again", "handoff"]);
+
+  handoff.open("draft-1");
   expect(await round).toEqual({
     ok: true,
     results: ["order-1", "products", "order-2", "draft-1", "claimed", "draft-2"],
@@ -178,10 +181,10 @@ test("mixed lanes return results in call order", async () => {
   expect(starts).toEqual([
     "lookup",
     "search",
+    "lookup-again",
     "handoff",
     "claim",
     "handoff-again",
-    "lookup-again",
   ]);
 });
 

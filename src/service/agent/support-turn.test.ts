@@ -96,6 +96,7 @@ test("a scripted lookup_order returns the service payload and a filtered draft",
     draft: "Your order #W002 is shipped.",
     toolPayloads: [shippedOrder],
     toolTraces: [{ callId: "lookup-1", tool: "lookup_order" }],
+    skippedCalls: [],
     unmatchedOrderCount: 0,
     handoffDraft: undefined,
     contextSummary: null,
@@ -220,6 +221,7 @@ test("a seventh tool round does not call the model again", async () => {
 
   expect(calls).toBe(6);
   expect(result.draft).toBe("Lookup round 6.");
+  expect(result.skippedCalls).toEqual([]);
   expect(result.toolPayloads).toEqual(Array.from({ length: 6 }, () => shippedOrder));
   expect(result.toolTraces).toEqual(
     Array.from({ length: 6 }, (_unused, index) => ({
@@ -227,6 +229,230 @@ test("a seventh tool round does not call the model again", async () => {
       tool: "lookup_order" as const,
     })),
   );
+});
+
+test("eight product searches finish in one chunk and the reply names none left over", async () => {
+  const seen: { assistants: number; tools: number }[] = [];
+  const model: ScriptedModel = {
+    async complete(input) {
+      seen.push({
+        assistants: input.messages.filter((message) => message.role === "assistant").length,
+        tools: input.messages.filter((message) => message.role === "tool").length,
+      });
+      if (input.messages.some((message) => message.role === "tool")) {
+        return { text: "Eight products are listed." };
+      }
+      return { text: "Checking eight products.", toolCalls: searchCalls(8) };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [],
+    model,
+    sessionId,
+    customerText: "List eight products.",
+    dependencies: listedProducts(dependencies(streakStore(0))),
+  });
+
+  expect(result.toolPayloads).toEqual(Array.from({ length: 8 }, () => listedProduct));
+  expect(result.draft).toBe("Eight products are listed.");
+  expect(result.skippedCalls).toEqual([]);
+  expect(seen).toEqual([
+    { assistants: 0, tools: 0 },
+    { assistants: 1, tools: 8 },
+  ]);
+});
+
+test("nine product searches run across two chunks and the reply has no refusal", async () => {
+  const seen: { assistants: number; tools: number }[] = [];
+  const model: ScriptedModel = {
+    async complete(input) {
+      seen.push({
+        assistants: input.messages.filter((message) => message.role === "assistant").length,
+        tools: input.messages.filter((message) => message.role === "tool").length,
+      });
+      if (input.messages.some((message) => message.role === "tool")) {
+        return { text: "Nine products are listed." };
+      }
+      return { text: "Checking nine products.", toolCalls: searchCalls(9) };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [],
+    model,
+    sessionId,
+    customerText: "List nine products.",
+    dependencies: listedProducts(dependencies(streakStore(0))),
+  });
+
+  expect(result.toolPayloads).toEqual(Array.from({ length: 9 }, () => listedProduct));
+  expect(result.toolTraces.map((trace) => trace.callId)).toEqual([
+    "search-1",
+    "search-2",
+    "search-3",
+    "search-4",
+    "search-5",
+    "search-6",
+    "search-7",
+    "search-8",
+    "search-9",
+  ]);
+  expect(result.draft).toBe("Nine products are listed.");
+  expect(result.skippedCalls).toEqual([]);
+  expect(seen).toEqual([
+    { assistants: 0, tools: 0 },
+    { assistants: 1, tools: 9 },
+  ]);
+});
+
+test("nine searches with one tool round leave the ninth named and unrun", async () => {
+  let calls = 0;
+  const model: ScriptedModel = {
+    complete() {
+      calls += 1;
+      if (calls > 1) throw new Error("second model call");
+      return { text: "Checking nine products.", toolCalls: searchCalls(9) };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [],
+    model,
+    sessionId,
+    customerText: "List nine products.",
+    maxToolRounds: 1,
+    dependencies: listedProducts(dependencies(streakStore(0))),
+  });
+
+  expect(calls).toBe(1);
+  expect(result.toolPayloads).toHaveLength(8);
+  expect(result.toolTraces.map((trace) => trace.callId)).toEqual([
+    "search-1",
+    "search-2",
+    "search-3",
+    "search-4",
+    "search-5",
+    "search-6",
+    "search-7",
+    "search-8",
+  ]);
+  expect(result.skippedCalls).toEqual([
+    { callId: "search-9", tool: "search_products", args: { mode: "list" } },
+  ]);
+  expect(result.draft).toBe(
+    "Checking nine products. I could not run these checks in this message: search_products (mode=list)",
+  );
+});
+
+test("two Early Risers claims in one chunk return the same code", async () => {
+  const issued: string[] = [];
+  const model: ScriptedModel = {
+    async complete(input) {
+      if (input.messages.some((message) => message.role === "tool")) return { text: "Same code twice." };
+      return {
+        text: "Claiming Early Risers.",
+        toolCalls: [
+          { id: "claim-1", name: "claim_early_risers", args: { request: "yes" } },
+          { id: "claim-2", name: "claim_early_risers", args: { request: "yes again" } },
+        ],
+      };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [],
+    model,
+    sessionId,
+    customerText: "Yes, Early Risers.",
+    dependencies: {
+      ...dependencies(streakStore(0)),
+      promotion: {
+        session: {
+          id: parsedSession(),
+          localTimezone: { kind: "resolved", name: "America/Chicago" },
+          unmatchedOrderStreak: 0,
+        },
+        now: new Date("2026-10-08T13:00:00.000Z"),
+        store: reusingCodeStore(),
+        issueCode() {
+          const code = issued.length === 0 ? "EARLY-AAAAAAAA" : "EARLY-BBBBBBBB";
+          issued.push(code);
+          return code;
+        },
+      },
+    },
+  });
+
+  expect(issued).toEqual(["EARLY-AAAAAAAA"]);
+  expect(result.toolPayloads).toEqual([
+    {
+      kind: "promotion_eligible",
+      campaign: "Early Risers",
+      code: "EARLY-AAAAAAAA",
+      discountPercent: 10,
+      validOn: "2026-10-08",
+      expiresAt: "2026-10-09T00:00:00-05:00",
+      timezone: "America/Chicago",
+    },
+    {
+      kind: "promotion_eligible",
+      campaign: "Early Risers",
+      code: "EARLY-AAAAAAAA",
+      discountPercent: 10,
+      validOn: "2026-10-08",
+      expiresAt: "2026-10-09T00:00:00-05:00",
+      timezone: "America/Chicago",
+    },
+  ]);
+  expect(result.draft).toBe("Same code twice.");
+});
+
+test("a handoff in a later chunk keeps the first draft", async () => {
+  const model: ScriptedModel = {
+    async complete(input) {
+      if (input.messages.some((message) => message.role === "tool")) return { text: "One proposal." };
+      return {
+        text: "Preparing a person.",
+        toolCalls: [
+          {
+            id: "handoff-1",
+            name: "capture_handoff",
+            args: {
+              contact_email: "person@example.com",
+              reason: "I need a person",
+              order_number: "ab12",
+            },
+          },
+          ...searchCalls(7),
+          {
+            id: "handoff-2",
+            name: "capture_handoff",
+            args: {
+              contact_email: "other@example.com",
+              reason: "A different reason",
+              order_number: "zz99",
+            },
+          },
+        ],
+      };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [],
+    model,
+    sessionId,
+    customerText: "I need a person, and also these products.",
+    dependencies: listedProducts(dependencies(streakStore(0))),
+  });
+
+  expect(result.handoffDraft).toEqual(firstHandoff.draft);
+  expect(result.toolPayloads[0]).toEqual(firstHandoff);
+  expect(result.toolPayloads[8]).toEqual(firstHandoff);
+  expect(result.toolPayloads).toHaveLength(9);
+  expect(result.draft).toBe("One proposal.");
+  expect(result.skippedCalls).toEqual([]);
 });
 
 test("a supplied thread id that differs from the session id throws before the model runs", async () => {
@@ -401,6 +627,59 @@ test("the summarize node keeps the current turn raw once history passes 70 perce
   expect(seen[0]?.messages.some((message) => message.content.includes("fact0"))).toBe(false);
   expect(result.contextSummary).toEqual({ summary: "Earlier order facts.", coveredThrough: 1 });
 });
+
+const listedProduct = {
+  kind: "products_found",
+  filtersApplied: {},
+  catalogFields: ["name", "stockLevel"],
+  missingFields: ["price", "size", "color", "rating", "stock-keeping code"],
+  mode: "list",
+  absent: false,
+  products: [],
+};
+
+function searchCalls(count: number) {
+  return Array.from({ length: count }, (_item, index) => ({
+    id: `search-${index + 1}`,
+    name: "search_products" as const,
+    args: { mode: "list" as const },
+  }));
+}
+
+function listedProducts(base: SupportTurnDependencies): SupportTurnDependencies {
+  return {
+    ...base,
+    products: {
+      catalog: {
+        async matchProducts() {
+          return [];
+        },
+        async listProducts() {
+          return [];
+        },
+      },
+      embedder: {
+        async embed() {
+          return [];
+        },
+      },
+    },
+  };
+}
+
+function reusingCodeStore(): EarlyRisersCodeStore {
+  const rows = new Map<string, Awaited<ReturnType<EarlyRisersCodeStore["insertOrReuse"]>>>();
+  return {
+    async insertOrReuse(key, create) {
+      const id = `${key.sessionId}|${key.validOn}`;
+      const existing = rows.get(id);
+      if (existing !== undefined) return existing;
+      const created = create();
+      rows.set(id, created);
+      return created;
+    },
+  };
+}
 
 function dependencies(streaks: OrderStreakStore): SupportTurnDependencies {
   return {
