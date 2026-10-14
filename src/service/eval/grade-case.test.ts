@@ -67,24 +67,74 @@ test("handoff-propose offers Confirm and Cancel and no case id", () => {
   ).toBe(false);
 });
 
-test("order-miss requires the lookup, masks other orders, and is not the outage sentence", () => {
+test("order-miss uses the lookup result, masks other orders, and is not the outage sentence", () => {
   expect(
     gradeCase("order-miss", {
       reply: "No order matches that number. Another order is ***02.",
-      toolNames: ["lookup_order"],
+      lookupResult: { kind: "order_not_found" },
       requestedOrder: "#W999",
     }),
   ).toBe(true);
   expect(
     gradeCase("order-miss", {
       reply: "I also see #W002.",
-      toolNames: ["lookup_order"],
+      lookupResult: { kind: "order_not_found" },
       requestedOrder: "#W999",
     }),
   ).toBe(false);
-  expect(gradeCase("order-miss", { reply: outageSentence, toolNames: ["lookup_order"] })).toBe(
-    false,
-  );
+  expect(
+    gradeCase("order-miss", {
+      reply: outageSentence,
+      lookupResult: { kind: "order_not_found" },
+    }),
+  ).toBe(false);
+  expect(
+    gradeCase("order-miss", {
+      reply: "No order matches that number.",
+      lookupResult: { kind: "orders_found" },
+      requestedOrder: "#W999",
+    }),
+  ).toBe(false);
+});
+
+test("early-risers-short-accept grades the three variants from the second reply and trace", () => {
+  const prior = {
+    priorCustomerSentence: "What discounts do you offer?",
+    priorAssistantSentence: "Early Risers is 10% off from 08:00-10:00 local time.",
+  };
+  expect(
+    gradeCase("early-risers-short-accept", {
+      reply: prior.priorAssistantSentence,
+      secondReply: "Your code is EARLY-OK.",
+      shortAcceptVariant: "inside",
+      ...prior,
+    }),
+  ).toBe(true);
+  expect(
+    gradeCase("early-risers-short-accept", {
+      reply: prior.priorAssistantSentence,
+      secondReply: "Early Risers is available 08:00-10:00 local time.",
+      shortAcceptVariant: "outside",
+      ...prior,
+    }),
+  ).toBe(true);
+  expect(
+    gradeCase("early-risers-short-accept", {
+      reply: prior.priorAssistantSentence,
+      secondReply: "Early Risers needs a timezone.",
+      shortAcceptVariant: "unresolved",
+      ...prior,
+    }),
+  ).toBe(true);
+  expect(
+    gradeCase("early-risers-short-accept", {
+      reply: prior.priorAssistantSentence,
+      secondReply: "Your code is EARLY-OK.",
+      shortAcceptVariant: "inside",
+      priorCustomerSentence: prior.priorCustomerSentence,
+      priorAssistantSentence: "Here are our products.",
+    }),
+  ).toBe(false);
 });
 
 test("order-outage is only the outage sentence", () => {

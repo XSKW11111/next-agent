@@ -1,10 +1,12 @@
 import type { AgentConfig } from "@/infra/agent-config";
+import type { LocalObservabilityStore } from "@/infra/local-observability-store";
 import { liveChatRuntime } from "@/infra/live-runtime";
 import type { Session, SessionId } from "../../../domain/session";
 import type { ScriptedModel, SupportTurnDependencies } from "../../../service/agent/support-turn";
 import type { ProposalStore } from "../../../service/business/handoff/handoff";
 import type { ToolCardStore } from "../../../service/tool/customer-tool-cards";
 import type { MessageStore } from "../../../service/turn/message-store";
+import type { TurnTracingSession } from "../../../service/turn/submit-traced-turn";
 
 export type SessionStore = {
   save(session: Session): Promise<void>;
@@ -20,6 +22,8 @@ export type ChatRuntime = {
   readonly model: ScriptedModel;
   readonly dependencies: SupportTurnDependencies;
   readonly newSessionId: () => string;
+  readonly observability: LocalObservabilityStore;
+  readonly turnTracing?: TurnTracingSession;
   readonly maxToolRounds?: number;
   readonly productMatchThreshold?: number;
   readonly maxProductCandidates?: number;

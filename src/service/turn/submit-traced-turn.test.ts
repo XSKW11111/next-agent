@@ -19,7 +19,7 @@ test("a new traced turn records domain input and output on the root run", async 
   const messages = memoryMessages();
   const client = memoryLangSmithRunsPort();
   const tracing = createTurnTracingSession({
-    config: { enabled: true, apiKey: "test", project: "unit" },
+    config: { enabled: true, sink: "local", apiKey: "test", project: "unit" },
     client,
   });
 
@@ -66,7 +66,7 @@ test("a same-text retry returns the saved reply without a second root run", asyn
   const messages = memoryMessages();
   const client = memoryLangSmithRunsPort();
   const tracing = createTurnTracingSession({
-    config: { enabled: true, apiKey: "test", project: "unit" },
+    config: { enabled: true, sink: "local", apiKey: "test", project: "unit" },
     client,
   });
   const input = {
@@ -91,7 +91,7 @@ test("a traced tool round stores the chunk plan and tool result", async () => {
   const messages = memoryMessages();
   const client = memoryLangSmithRunsPort();
   const tracing = createTurnTracingSession({
-    config: { enabled: true, apiKey: "test", project: "unit" },
+    config: { enabled: true, sink: "local", apiKey: "test", project: "unit" },
     client,
   });
   let calls = 0;
@@ -146,7 +146,7 @@ test("a second turn includes the first completed pair in the trace input", async
   const messages = memoryMessages();
   const client = memoryLangSmithRunsPort();
   const tracing = createTurnTracingSession({
-    config: { enabled: true, apiKey: "test", project: "unit" },
+    config: { enabled: true, sink: "local", apiKey: "test", project: "unit" },
     client,
   });
 

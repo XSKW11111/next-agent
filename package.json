@@ -5,6 +5,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "eval:live": "npx tsx scripts/live-eval.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

@@ -18,14 +18,19 @@ describe("parseDebugTraceConfig", () => {
     ).toEqual({ ok: true, value: traceConfigDisabled() });
   });
 
-  test("requires the project and key when tracing is on", () => {
+  test("uses the local sink when tracing is on without LangSmith keys", () => {
     expect(parseDebugTraceConfig({ NEXT_AGENT_DEBUG_TRACE: "true" })).toEqual({
-      ok: false,
-      names: ["LANGSMITH_API_KEY", "LANGSMITH_PROJECT"],
+      ok: true,
+      value: {
+        enabled: true,
+        sink: "local",
+        apiKey: "",
+        project: "local",
+      },
     });
   });
 
-  test("reads the LangSmith settings when tracing is on", () => {
+  test("reads the LangSmith settings when both keys are present", () => {
     expect(
       parseDebugTraceConfig({
         NEXT_AGENT_DEBUG_TRACE: "true",
@@ -36,6 +41,7 @@ describe("parseDebugTraceConfig", () => {
       ok: true,
       value: {
         enabled: true,
+        sink: "langsmith",
         apiKey: "ls-key",
         project: "next-agent-debug",
       },

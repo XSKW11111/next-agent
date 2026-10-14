@@ -26,12 +26,14 @@ export function ChatPanel() {
   const [failed, setFailed] = useState(false);
   const [draft, setDraft] = useState("");
   const [queued, setQueued] = useState<string | null>(null);
-  const sentQueued = useRef(false);
+  const sentQueuedRef = useRef(false);
+  const sessionStartRequestedRef = useRef(false);
   const sessionId = stored ?? created;
   const restoreHistory = stored !== null;
 
   useEffect(() => {
-    if (sessionId !== null) return;
+    if (sessionId !== null || readSession() !== null || sessionStartRequestedRef.current) return;
+    sessionStartRequestedRef.current = true;
     void startSession(setCreated, setFailed);
   }, [sessionId]);
 
@@ -53,7 +55,7 @@ export function ChatPanel() {
       restoreHistory={restoreHistory}
       draft={draft}
       queued={queued}
-      sentQueued={sentQueued}
+      sentQueuedRef={sentQueuedRef}
     />
   );
 }
@@ -97,13 +99,13 @@ function ChatThread({
   restoreHistory,
   draft,
   queued,
-  sentQueued,
+  sentQueuedRef,
 }: {
   sessionId: string;
   restoreHistory: boolean;
   draft: string;
   queued: string | null;
-  sentQueued: { current: boolean };
+  sentQueuedRef: { current: boolean };
 }) {
   const { messages, sendMessage, setMessages, status } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({
@@ -139,10 +141,10 @@ function ChatThread({
   }, [restoreHistory, sessionId, setMessages]);
 
   useEffect(() => {
-    if (queued === null || !canSend || sentQueued.current) return;
-    sentQueued.current = true;
+    if (queued === null || !canSend || sentQueuedRef.current) return;
+    sentQueuedRef.current = true;
     void sendMessage({ text: queued });
-  }, [queued, canSend, sendMessage, sentQueued]);
+  }, [queued, canSend, sendMessage, sentQueuedRef]);
 
   return (
     <ChatLayout

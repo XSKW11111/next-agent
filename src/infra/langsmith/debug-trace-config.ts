@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export type DebugTraceConfig = {
   readonly enabled: boolean;
+  /** LangSmith when keys exist; local in-memory + disk when they do not. */
+  readonly sink: "off" | "local" | "langsmith";
   readonly apiKey: string;
   readonly project: string;
 };
@@ -15,7 +17,8 @@ const requiredText = z.string().trim().min(1);
 
 /**
  * Parsed only by debug entrypoints — not merged into the required customer env schema.
- * Absent or `false` means tracing off. `true` requires LangSmith key and project.
+ * Absent or `false` means tracing off. `true` with LangSmith keys uses LangSmith.
+ * `true` without keys uses the local sink so latency and traces still persist on disk.
  */
 export function parseDebugTraceConfig(
   env: Readonly<Record<string, string | undefined>>,
@@ -30,24 +33,29 @@ export function parseDebugTraceConfig(
 
   const apiKey = requiredText.safeParse(env.LANGSMITH_API_KEY);
   const project = requiredText.safeParse(env.LANGSMITH_PROJECT);
-  const names = [
-    ...(apiKey.success ? [] : ["LANGSMITH_API_KEY"]),
-    ...(project.success ? [] : ["LANGSMITH_PROJECT"]),
-  ];
-  if (names.length > 0 || !apiKey.success || !project.success) {
-    return { ok: false, names };
+  if (apiKey.success && project.success) {
+    return {
+      ok: true,
+      value: {
+        enabled: true,
+        sink: "langsmith",
+        apiKey: apiKey.data,
+        project: project.data,
+      },
+    };
   }
 
   return {
     ok: true,
     value: {
       enabled: true,
-      apiKey: apiKey.data,
-      project: project.data,
+      sink: "local",
+      apiKey: "",
+      project: "local",
     },
   };
 }
 
 export function traceConfigDisabled(): DebugTraceConfig {
-  return { enabled: false, apiKey: "", project: "" };
+  return { enabled: false, sink: "off", apiKey: "", project: "" };
 }

@@ -20,21 +20,34 @@ export const evalCaseIds = [
   "order-miss",
   "order-outage",
   "email-orders",
+  "early-risers-short-accept",
 ] as const;
 
 export type EvalCaseId = (typeof evalCaseIds)[number];
+
+export type ShortAcceptVariant = "inside" | "outside" | "unresolved";
 
 export type GradeOrder = {
   readonly orderNumber: string;
   readonly status: string;
 };
 
+export type GradeLookupResult = {
+  readonly kind: string;
+  readonly tool?: string;
+};
+
 export type GradeInput = {
   readonly reply: string;
   readonly secondReply?: string;
+  /** @deprecated Prefer lookupResult from the debug trace. */
   readonly toolNames?: readonly string[];
+  readonly lookupResult?: GradeLookupResult;
   readonly requestedOrder?: string;
   readonly orders?: readonly GradeOrder[];
+  readonly priorCustomerSentence?: string;
+  readonly priorAssistantSentence?: string;
+  readonly shortAcceptVariant?: ShortAcceptVariant;
 };
 
 export function gradeCase(id: EvalCaseId, input: GradeInput): boolean {
@@ -57,6 +70,8 @@ export function gradeCase(id: EvalCaseId, input: GradeInput): boolean {
       return input.reply.trim() === outageSentence;
     case "email-orders":
       return gradesEmailOrders(input.reply, input.orders);
+    case "early-risers-short-accept":
+      return gradesShortAccept(input);
     default: {
       const unexpected: never = id;
       return unexpected;
@@ -95,7 +110,7 @@ function gradesHandoff(reply: string): boolean {
 }
 
 function gradesOrderMiss(input: GradeInput): boolean {
-  if (!input.toolNames?.includes("lookup_order")) return false;
+  if (!hasLookupMiss(input)) return false;
   if (input.reply.trim() === outageSentence) return false;
   const requested = input.requestedOrder?.toUpperCase();
   for (const token of input.reply.match(unmaskedOrder) ?? []) {
@@ -104,10 +119,52 @@ function gradesOrderMiss(input: GradeInput): boolean {
   return true;
 }
 
+function hasLookupMiss(input: GradeInput): boolean {
+  if (input.lookupResult !== undefined) {
+    return input.lookupResult.kind === "order_not_found";
+  }
+  return input.toolNames?.includes("lookup_order") === true;
+}
+
 function gradesEmailOrders(reply: string, orders: readonly GradeOrder[] | undefined): boolean {
   if (orders === undefined || orders.length < 2) return false;
   return orders.every(
     (order) => reply.includes(order.orderNumber) && reply.toLowerCase().includes(order.status.toLowerCase()),
+  );
+}
+
+function gradesShortAccept(input: GradeInput): boolean {
+  const variant = input.shortAcceptVariant;
+  if (variant === undefined) return false;
+  if (input.secondReply === undefined) return false;
+  if (!traceCarriesExplanation(input)) return false;
+  if (isFreshMenu(input.secondReply)) return false;
+
+  switch (variant) {
+    case "inside":
+      return singleCode(input.secondReply) !== undefined;
+    case "outside":
+      return explainsWindow(input.secondReply) && !hasEarlyCode(input.secondReply);
+    case "unresolved":
+      return /early risers/i.test(input.secondReply) && !hasEarlyCode(input.secondReply);
+    default: {
+      const unexpected: never = variant;
+      return unexpected;
+    }
+  }
+}
+
+function traceCarriesExplanation(input: GradeInput): boolean {
+  const customer = input.priorCustomerSentence ?? "";
+  const assistant = input.priorAssistantSentence ?? "";
+  return /discount/i.test(customer) && /early risers/i.test(assistant);
+}
+
+function isFreshMenu(reply: string): boolean {
+  return (
+    /\border\b/i.test(reply) ||
+    /\bproduct\b/i.test(reply) ||
+    (/discount/i.test(reply) && /offer/i.test(reply) && !/yes|claim|code|08:00/i.test(reply))
   );
 }
 

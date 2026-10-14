@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { sessionIdSchema, type SessionId } from "../../../../../../domain/session";
 import { parseTurn } from "../../../../../../domain/turn";
+import { projectSupportTurnTraceView } from "../../../../../../service/trace/project-support-turn-trace-view";
 import { submitTurn, type SubmitTurnResult } from "../../../../../../service/turn/submit-turn";
+import { submitTracedTurn } from "../../../../../../service/turn/submit-traced-turn";
 import type { CustomerToolCard } from "../../../../../../service/tool/customer-tool-cards";
 import { currentChatRuntime, type ChatRuntime } from "../../../runtime";
 import { uiMessageStreamResponse } from "../../../ui-message-stream";
@@ -38,7 +41,7 @@ export async function POST(
   if (!turn.ok) return invalid();
 
   const existing = runtime.proposals.findProposalForTurn(session.id, turn.value.id);
-  const result = await submitTurn({
+  const turnInput = {
     sessionId: turn.value.sessionId,
     turnId: turn.value.id,
     text: turn.value.text,
@@ -65,7 +68,24 @@ export async function POST(
       },
     },
     toolCards: runtime.toolCards,
-  });
+  };
+
+  const started = performance.now();
+  const tracing = runtime.turnTracing;
+  if (tracing !== undefined) {
+    const traced = await submitTracedTurn({ ...turnInput, tracing });
+    const serverLatencyMs = Math.round(performance.now() - started);
+    await saveTracedObservability(runtime, traced, turn.value.sessionId, turn.value.id, turn.value.text, serverLatencyMs);
+    return turnResponse(
+      traced,
+      runtime.proposals.findProposalForTurn(session.id, turn.value.id),
+      runtime.toolCards.findForTurn(session.id, turn.value.id),
+    );
+  }
+
+  const result = await submitTurn(turnInput);
+  const serverLatencyMs = Math.round(performance.now() - started);
+  await saveLatencyOnly(runtime, result, turn.value.sessionId, turn.value.id, turn.value.text, serverLatencyMs);
   return turnResponse(
     result,
     runtime.proposals.findProposalForTurn(session.id, turn.value.id),
@@ -92,8 +112,69 @@ export async function GET(
   });
 }
 
-function turnResponse(
+async function saveTracedObservability(
+  runtime: ChatRuntime,
+  traced: Awaited<ReturnType<typeof submitTracedTurn>>,
+  sessionId: string,
+  turnId: string,
+  currentSentence: string,
+  serverLatencyMs: number,
+): Promise<void> {
+  const tracing = runtime.turnTracing;
+  if (
+    tracing === undefined ||
+    traced.kind !== "reply" ||
+    traced.langsmithRunId === null ||
+    !("completion" in traced)
+  ) {
+    return;
+  }
+  const view = await projectSupportTurnTraceView({
+    client: tracing.client,
+    runId: traced.langsmithRunId,
+    completion: traced.completion,
+    traceInput: traced.traceInput,
+  });
+  const sink = tracing.config.sink === "langsmith" ? "langsmith+local" : "local";
+  await runtime.observability.save({
+    id: traced.langsmithRunId,
+    sessionId,
+    turnId,
+    savedAt: new Date().toISOString(),
+    currentSentence,
+    reply: traced.reply,
+    serverLatencyMs,
+    stepTimingsMs: view.stepTimingsMs,
+    trace: view,
+    sink,
+  });
+}
+
+async function saveLatencyOnly(
+  runtime: ChatRuntime,
   result: SubmitTurnResult,
+  sessionId: string,
+  turnId: string,
+  currentSentence: string,
+  serverLatencyMs: number,
+): Promise<void> {
+  if (result.kind !== "reply") return;
+  await runtime.observability.save({
+    id: randomUUID(),
+    sessionId,
+    turnId,
+    savedAt: new Date().toISOString(),
+    currentSentence,
+    reply: result.reply,
+    serverLatencyMs,
+    stepTimingsMs: {},
+    trace: null,
+    sink: "local",
+  });
+}
+
+function turnResponse(
+  result: SubmitTurnResult | Awaited<ReturnType<typeof submitTracedTurn>>,
   proposal: ReturnType<ChatRuntime["proposals"]["findProposalForTurn"]>,
   toolCards: readonly CustomerToolCard[] | undefined,
 ): Response {

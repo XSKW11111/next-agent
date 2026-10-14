@@ -24,8 +24,8 @@ export type DebugChatRuntime = ChatRuntime & {
 };
 
 /**
- * Debug / eval host entry. Throws when LangSmith is missing or tracing is not enabled.
- * Customer `liveChatRuntime` stays unaffected.
+ * Debug / eval host entry. Requires NEXT_AGENT_DEBUG_TRACE=true.
+ * Uses LangSmith when keys are set; otherwise an in-memory runs port (local sink).
  */
 export function debugChatRuntime(
   env: Readonly<Record<string, string | undefined>>,
@@ -51,7 +51,11 @@ export function debugChatRuntime(
       ? base.dependencies.orders.catalog
       : debugOrderCatalog(overrides.orderCase));
 
-  const client = options?.runsPort ?? createLangSmithRunsPort(debug.value);
+  const client =
+    options?.runsPort ??
+    (debug.value.sink === "langsmith"
+      ? createLangSmithRunsPort(debug.value)
+      : memoryLangSmithRunsPort());
   const turnTracing = createTurnTracingSession({
     config: debug.value,
     client,
@@ -59,6 +63,7 @@ export function debugChatRuntime(
 
   return {
     ...base,
+    turnTracing,
     dependencies: {
       ...base.dependencies,
       orders: {
@@ -66,7 +71,6 @@ export function debugChatRuntime(
         catalog: orderCatalog,
       },
     },
-    turnTracing,
   };
 }
 
