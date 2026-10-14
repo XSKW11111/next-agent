@@ -10,6 +10,7 @@ import {
 } from "../../../domain/session";
 import { parseTurn } from "../../../domain/turn";
 import type { Proposal, SupportCase } from "../../../domain/handoff";
+import type { TurnObservabilityRecord } from "../../../domain/turn-observability";
 import { captureHandoff, type ProposalStore } from "../../../service/business/handoff/handoff";
 import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../../../service/business/order/lookup-order";
 import type { ProductSearchDependencies } from "../../../service/business/product/search-products";
@@ -426,11 +427,39 @@ function chatRuntime(
     proposals,
     toolCards: memoryToolCardStore(),
     model,
+    observability: memoryObservability(),
     dependencies: dependencies(proposals, orders, products),
     newSessionId() {
       const id = remaining.shift();
       if (id === undefined) throw new Error("test fixture ran out of session ids");
       return id;
+    },
+  };
+}
+
+function memoryObservability(): ChatRuntime["observability"] {
+  const records = new Map<string, TurnObservabilityRecord>();
+  return {
+    async save(record) {
+      records.set(record.id, record);
+    },
+    async list() {
+      return [...records.values()]
+        .sort((left, right) => right.savedAt.localeCompare(left.savedAt))
+        .map((record) => ({
+          id: record.id,
+          sessionId: record.sessionId,
+          turnId: record.turnId,
+          savedAt: record.savedAt,
+          currentSentence: record.currentSentence,
+          reply: record.reply,
+          serverLatencyMs: record.serverLatencyMs,
+          hasTrace: record.trace !== null,
+          sink: record.sink,
+        }));
+    },
+    async get(id) {
+      return records.get(id);
     },
   };
 }

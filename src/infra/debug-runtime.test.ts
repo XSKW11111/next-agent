@@ -29,14 +29,17 @@ describe("debugChatRuntime", () => {
     ).toThrow("NEXT_AGENT_DEBUG_TRACE=true");
   });
 
-  test("fails when LangSmith keys are missing", () => {
-    expect(() =>
-      debugChatRuntimeForTests({
-        ...validEnv,
-        LANGSMITH_API_KEY: "",
-        LANGSMITH_PROJECT: "",
-      }),
-    ).toThrow(/LANGSMITH_API_KEY/);
+  test("uses the local sink when LangSmith keys are missing", () => {
+    const runtime = debugChatRuntimeForTests({
+      ...validEnv,
+      LANGSMITH_API_KEY: "",
+      LANGSMITH_PROJECT: "",
+    });
+    expect(runtime.turnTracing.config).toMatchObject({
+      enabled: true,
+      sink: "local",
+      project: "local",
+    });
   });
 
   test("overlays the order-outage catalog", async () => {

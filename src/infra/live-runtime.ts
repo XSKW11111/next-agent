@@ -3,12 +3,19 @@ import type { ChatRuntime } from "@/app/api/chat/runtime";
 import { parseSession, type Session } from "@/domain/session";
 import type { Proposal, SupportCase } from "@/domain/handoff";
 import { parseAgentConfig } from "@/infra/agent-config";
+import { parseDebugTraceConfig } from "@/infra/langsmith/debug-trace-config";
+import {
+  createLangSmithRunsPort,
+  memoryLangSmithRunsPort,
+} from "@/infra/langsmith/langsmith-runs-port";
+import { localObservabilityStore } from "@/infra/local-observability-store";
 import { openRouterModel } from "@/infra/open-router-model";
 import { createAgentSupabase } from "@/infra/supabase";
 import { openRouterEmbedder, supabaseEarlyRisers, supabaseOrderCatalog, supabaseProductCatalog } from "@/infra/supabase-catalog";
 import { supabaseMessages, supabaseSessions, supabaseStreaks } from "@/infra/supabase-support";
 import type { ProposalStore } from "@/service/business/handoff/handoff";
 import { memoryToolCardStore } from "@/service/tool/customer-tool-cards";
+import { createTurnTracingSession } from "@/service/turn/submit-traced-turn";
 
 const placeholderSessionId = "00000000-0000-4000-8000-000000000000";
 
@@ -22,6 +29,19 @@ export function liveChatRuntime(
   }
   const client = createAgentSupabase(parsed.value);
   const proposals = memoryProposals();
+  const debug = parseDebugTraceConfig(env);
+  if (!debug.ok) {
+    throw new Error(`debug trace config is invalid: ${debug.names.join(", ")}`);
+  }
+  const turnTracing = debug.value.enabled
+    ? createTurnTracingSession({
+        config: debug.value,
+        client:
+          debug.value.sink === "langsmith"
+            ? createLangSmithRunsPort(debug.value)
+            : memoryLangSmithRunsPort(),
+      })
+    : undefined;
   return {
     config: parsed.value,
     sessions: supabaseSessions(client),
@@ -29,6 +49,8 @@ export function liveChatRuntime(
     proposals,
     toolCards: memoryToolCardStore(),
     model: openRouterModel(parsed.value, fetchImpl ?? fetch),
+    observability: localObservabilityStore(),
+    ...(turnTracing === undefined ? {} : { turnTracing }),
     dependencies: {
       orders: {
         catalog: supabaseOrderCatalog(client),
