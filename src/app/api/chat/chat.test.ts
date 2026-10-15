@@ -95,9 +95,15 @@ test("the same turn id and the same text returns the saved reply", async () => {
 
 test("a failed observability receipt does not fail a saved reply or its retry", async () => {
   const calls = { count: 0 };
-  const runtime = await startedRuntime(replyModel(calls, "On the way."));
-  runtime.observability.save = async () => {
-    throw new Error("EROFS: read-only file system");
+  const started = await startedRuntime(replyModel(calls, "On the way."));
+  const runtime = {
+    ...started,
+    observability: {
+      ...started.observability,
+      async save() {
+        throw new Error("EROFS: read-only file system");
+      },
+    },
   };
 
   const first = await sendMessage(

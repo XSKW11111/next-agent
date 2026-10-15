@@ -75,7 +75,15 @@ export async function POST(
   if (tracing !== undefined) {
     const traced = await submitTracedTurn({ ...turnInput, tracing });
     const serverLatencyMs = Math.round(performance.now() - started);
-    await saveTracedObservability(runtime, traced, turn.value.sessionId, turn.value.id, turn.value.text, serverLatencyMs);
+    try {
+      await saveTracedObservability(runtime, traced, turn.value.sessionId, turn.value.id, turn.value.text, serverLatencyMs);
+    } catch {
+      console.error("chat_observability_receipt_failed", {
+        sessionId: turn.value.sessionId,
+        turnId: turn.value.id,
+        mode: "traced",
+      });
+    }
     return turnResponse(
       traced,
       runtime.proposals.findProposalForTurn(session.id, turn.value.id),
@@ -85,7 +93,15 @@ export async function POST(
 
   const result = await submitTurn(turnInput);
   const serverLatencyMs = Math.round(performance.now() - started);
-  await saveLatencyOnly(runtime, result, turn.value.sessionId, turn.value.id, turn.value.text, serverLatencyMs);
+  try {
+    await saveLatencyOnly(runtime, result, turn.value.sessionId, turn.value.id, turn.value.text, serverLatencyMs);
+  } catch {
+    console.error("chat_observability_receipt_failed", {
+      sessionId: turn.value.sessionId,
+      turnId: turn.value.id,
+      mode: "latency_only",
+    });
+  }
   return turnResponse(
     result,
     runtime.proposals.findProposalForTurn(session.id, turn.value.id),
