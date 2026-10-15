@@ -93,6 +93,40 @@ test("the same turn id and the same text returns the saved reply", async () => {
   expect(calls.count).toBe(1);
 });
 
+test("a failed observability receipt does not fail a saved reply or its retry", async () => {
+  const calls = { count: 0 };
+  const runtime = await startedRuntime(replyModel(calls, "On the way."));
+  runtime.observability.save = async () => {
+    throw new Error("EROFS: read-only file system");
+  };
+
+  const first = await sendMessage(
+    jsonRequest({ turnId, text: "where is my order" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const second = await sendMessage(
+    jsonRequest({ turnId, text: "where is my order" }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const read = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+
+  expect(first.status).toBe(200);
+  expect(await replyText(first)).toBe("On the way.");
+  expect(second.status).toBe(200);
+  expect(await replyText(second)).toBe("On the way.");
+  expect(calls.count).toBe(1);
+  expect(await read.json()).toEqual({
+    messages: [
+      customerRow(1, turnId, "where is my order"),
+      assistantRow(2, turnId, "On the way."),
+    ],
+    proposals: [],
+    toolCards: [],
+  });
+});
+
 test("nine product searches store one assistant reply and a retry does not run them again", async () => {
   const calls = { count: 0 };
   const model: ScriptedModel = {
