@@ -80,3 +80,5 @@ The script signals the process group recorded at launch. It does not kill every 
 - `.cursor/skills/verify-next-agent/cleanup.sh <evidence-dir>` stops that instance and keeps the proof.
 
 The feature recipes are in `features/README.md`.
+
+Read [the dated coverage status](references/coverage-status.md) before reporting a feature as verified. It records the last browser run's blocked and unverified paths against its tested revision. Re-run a path before applying that verdict to a newer revision.

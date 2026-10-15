@@ -28,6 +28,7 @@ This directory is the maintained source for verifying the support chat. Read the
 - Record the feature id with every artifact.
 - Report an unreachable path with the attempted step and the unmet precondition. Mark a path untested when its trigger did not occur in this run.
 - Do not report a skipped entry point as verified through a different path.
+- Check [the dated coverage status](../references/coverage-status.md) for the last run's observed failures and unverified paths. Its verdicts apply only to the recorded revision and run.
 
 ## Feature entry contract
 
