@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { z } from "zod";
+import { observeProvider, type ReportedUsage } from "./langsmith/turn-trace-context";
 import { orderNumberSchema } from "@/domain/order";
 import type { Product } from "@/domain/product";
 import type { CatalogOrder, OrderCatalog } from "@/service/business/order/lookup-order";
@@ -16,6 +18,12 @@ import type {
 
 const earlyRisersCampaign = "Early Risers";
 const issuedCode = /^EARLY-[A-Za-z0-9]{8}$/;
+const embeddingModel = "openai/text-embedding-3-small";
+const embeddingUsageSchema = z.object({
+  prompt_tokens: z.number().int().nonnegative().optional(),
+  total_tokens: z.number().int().nonnegative().optional(),
+  cost: z.number().finite().nonnegative().optional(),
+});
 
 type OrderRow = {
   readonly order_number?: unknown;
@@ -76,14 +84,15 @@ export function supabaseProductCatalog(client: SupabaseClient): Catalog {
 export function openRouterEmbedder(apiKey: string, fetchImpl: typeof fetch = fetch): Embedder {
   return {
     async embed(query) {
-      const response = await fetchImpl("https://openrouter.ai/api/v1/embeddings", {
+      return observeProvider({ kind: "embedding", model: embeddingModel }, async () => {
+        const response = await fetchImpl("https://openrouter.ai/api/v1/embeddings", {
         method: "POST",
         headers: {
           authorization: `Bearer ${apiKey}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "openai/text-embedding-3-small",
+          model: embeddingModel,
           input: query,
           dimensions: 384,
         }),
@@ -96,9 +105,24 @@ export function openRouterEmbedder(apiKey: string, fetchImpl: typeof fetch = fet
       if (embedding === undefined) {
         throw new Error("embedding response is invalid");
       }
-      return embedding;
+      const usage = embeddingUsage(payload);
+      return { value: embedding, ...(usage === undefined ? {} : { usage }) };
+      });
     },
   };
+}
+
+function embeddingUsage(payload: unknown): ReportedUsage | undefined {
+  if (typeof payload !== "object" || payload === null || !("usage" in payload)) return undefined;
+  const parsed = embeddingUsageSchema.safeParse(payload.usage);
+  if (!parsed.success) return undefined;
+  const raw = parsed.data;
+  const usage: ReportedUsage = {
+    ...(raw.prompt_tokens === undefined ? {} : { inputTokens: raw.prompt_tokens }),
+    ...(raw.total_tokens === undefined ? {} : { totalTokens: raw.total_tokens }),
+    ...(raw.cost === undefined ? {} : { totalCost: raw.cost }),
+  };
+  return Object.keys(usage).length === 0 ? undefined : usage;
 }
 
 export function supabaseEarlyRisers(client: SupabaseClient): EarlyRisersCodeStore {

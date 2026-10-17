@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Client } from "langsmith";
 import type { LangSmithTraceConfig } from "./trace-config";
+import type { TraceObservation } from "./turn-trace-context";
 
 export type LangSmithRunsPort = {
   createRootRun(input: {
@@ -11,11 +12,7 @@ export type LangSmithRunsPort = {
     readonly tags: readonly string[];
   }): Promise<{ readonly runId: string }>;
 
-  createChildRun(input: {
-    readonly parentRunId: string;
-    readonly name: string;
-    readonly runType: "llm" | "tool" | "chain";
-  }): Promise<{ readonly runId: string }>;
+  writeObservation(parentRunId: string, observation: TraceObservation): Promise<{ readonly runId: string }>;
 
   patchRun(
     runId: string,
@@ -42,6 +39,8 @@ type StoredRun = {
   extra: Record<string, unknown>;
   error: string | null;
   readonly children: string[];
+  readonly startTime?: number;
+  readonly endTime?: number;
 };
 
 /** In-memory store for unit tests and offline projection. */
@@ -72,21 +71,24 @@ export function memoryLangSmithRunsPort(): LangSmithRunsPort & {
       });
       return { runId };
     },
-    async createChildRun(input) {
-      const parent = runs.get(input.parentRunId);
+    async writeObservation(parentRunId, observation) {
+      const parent = runs.get(parentRunId);
       if (parent === undefined) throw new Error("parent run is missing");
       const runId = randomUUID();
+      const details = observationDetails(observation);
       runs.set(runId, {
         id: runId,
-        name: input.name,
-        runType: input.runType,
-        parentRunId: input.parentRunId,
+        name: details.name,
+        runType: details.runType,
+        parentRunId,
         project: parent.project,
-        inputs: {},
-        outputs: null,
-        extra: {},
+        inputs: details.inputs,
+        outputs: details.outputs,
+        extra: details.extra,
         error: null,
         children: [],
+        startTime: observation.startedAtMs,
+        endTime: observation.endedAtMs,
       });
       parent.children.push(runId);
       return { runId };
@@ -126,15 +128,19 @@ export function createLangSmithRunsPort(config: LangSmithTraceConfig): LangSmith
       });
       return { runId };
     },
-    async createChildRun(input) {
+    async writeObservation(parentRunId, observation) {
       const runId = randomUUID();
+      const details = observationDetails(observation);
       await client.createRun({
         id: runId,
-        name: input.name,
-        run_type: input.runType,
-        parent_run_id: input.parentRunId,
-        inputs: {},
-        start_time: Date.now(),
+        name: details.name,
+        run_type: details.runType,
+        parent_run_id: parentRunId,
+        inputs: details.inputs,
+        outputs: details.outputs,
+        extra: details.extra,
+        start_time: observation.startedAtMs,
+        end_time: observation.endedAtMs,
       });
       return { runId };
     },
@@ -170,10 +176,65 @@ function serialize(run: StoredRun, runs: ReadonlyMap<string, StoredRun>): unknow
     outputs: run.outputs,
     extra: run.extra,
     error: run.error,
+    start_time: run.startTime,
+    end_time: run.endTime,
     child_runs: run.children.map((childId) => {
       const child = runs.get(childId);
       if (child === undefined) throw new Error("child run is missing");
       return serialize(child, runs);
     }),
+  };
+}
+
+function observationDetails(observation: TraceObservation): {
+  readonly name: string;
+  readonly runType: "llm" | "tool";
+  readonly inputs: Record<string, unknown>;
+  readonly outputs: Record<string, unknown>;
+  readonly extra: Record<string, unknown>;
+} {
+  switch (observation.kind) {
+    case "model":
+      return {
+        name: observation.operation === "summary" ? "summarize" : "chat-completion",
+        runType: "llm",
+        inputs: { operation: observation.operation },
+        outputs: providerOutputs(observation),
+        extra: { metadata: { ls_provider: "openrouter", ls_model_name: observation.model, usageReported: observation.usage?.totalTokens !== undefined, costReported: observation.usage?.totalCost !== undefined } },
+      };
+    case "embedding":
+      return {
+        name: "embed-query",
+        runType: "llm",
+        inputs: {},
+        outputs: providerOutputs(observation),
+        extra: { metadata: { ls_provider: "openrouter", ls_model_name: observation.model, operation: "embedding", usageReported: observation.usage?.totalTokens !== undefined, costReported: observation.usage?.totalCost !== undefined } },
+      };
+    case "tool":
+      return {
+        name: observation.name,
+        runType: "tool",
+        inputs: { callId: observation.callId },
+        outputs: { outcome: observation.outcome },
+        extra: {},
+      };
+    default: {
+      const unexpected: never = observation;
+      return unexpected;
+    }
+  }
+}
+
+function providerOutputs(observation: Extract<TraceObservation, { kind: "model" | "embedding" }>): Record<string, unknown> {
+  const usage = observation.usage;
+  if (usage === undefined) return { outcome: observation.outcome };
+  return {
+    outcome: observation.outcome,
+    usage_metadata: {
+      ...(usage.inputTokens === undefined ? {} : { input_tokens: usage.inputTokens }),
+      ...(usage.outputTokens === undefined ? {} : { output_tokens: usage.outputTokens }),
+      ...(usage.totalTokens === undefined ? {} : { total_tokens: usage.totalTokens }),
+      ...(usage.totalCost === undefined ? {} : { total_cost: usage.totalCost }),
+    },
   };
 }

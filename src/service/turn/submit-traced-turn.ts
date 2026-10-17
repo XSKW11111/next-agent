@@ -2,7 +2,7 @@ import type { SupportTurnTraceInput, SupportTurnTraceOutput } from "../../domain
 import { parseTurn, type Turn } from "../../domain/turn";
 import type { LangSmithTraceConfig } from "../../infra/langsmith/trace-config";
 import type { LangSmithRunsPort } from "../../infra/langsmith/langsmith-runs-port";
-import { withTurnTraceContext } from "../../infra/langsmith/turn-trace-context";
+import { withTurnTraceContext, type TraceObservation } from "../../infra/langsmith/turn-trace-context";
 import {
   runSupportTurn,
   type ScriptedModel,
@@ -23,6 +23,7 @@ export type TurnTracingSession = {
     readonly sessionId: string;
     readonly turnId: string;
   }) => Promise<{ readonly rootRunId: string }>;
+  readonly flushObservations: (rootRunId: string, observations: readonly TraceObservation[]) => Promise<number>;
   readonly finalizeRootRun: (input: {
     readonly rootRunId: string;
     readonly sessionId: string;
@@ -30,6 +31,10 @@ export type TurnTracingSession = {
     readonly traceInput: SupportTurnTraceInput;
     readonly traceOutput: SupportTurnTraceOutput;
     readonly stepTimingsMs: Readonly<Record<string, number>>;
+    readonly observationFailures: number;
+    readonly providerCalls: number;
+    readonly tokenUsageComplete: boolean;
+    readonly costUsageComplete: boolean;
     readonly error?: string;
   }) => Promise<void>;
 };
@@ -68,11 +73,37 @@ export function createTurnTracingSession(input: {
       });
       return { rootRunId: runId };
     },
+    async flushObservations(rootRunId, observations) {
+      const runIds = new Map<string, string>();
+      let failures = 0;
+      for (const observation of [...observations].sort((a, b) => a.sequence - b.sequence)) {
+        const parentRunId = observation.parentId === null ? rootRunId : runIds.get(observation.parentId);
+        if (parentRunId === undefined) {
+          failures += 1;
+          continue;
+        }
+        try {
+          const child = await input.client.writeObservation(parentRunId, observation);
+          runIds.set(observation.id, child.runId);
+        } catch {
+          failures += 1;
+        }
+      }
+      return failures;
+    },
     async finalizeRootRun(finalize) {
       await input.client.patchRun(finalize.rootRunId, {
         inputs: finalize.traceInput,
         outputs: finalize.traceOutput,
-        extra: { sessionId: finalize.sessionId, turnId: finalize.turnId, stepTimingsMs: finalize.stepTimingsMs },
+        extra: {
+          sessionId: finalize.sessionId,
+          turnId: finalize.turnId,
+          stepTimingsMs: finalize.stepTimingsMs,
+          observationFailures: finalize.observationFailures,
+          providerCalls: finalize.providerCalls,
+          tokenUsageComplete: finalize.tokenUsageComplete,
+          costUsageComplete: finalize.costUsageComplete,
+        },
         ...(finalize.error === undefined ? {} : { error: finalize.error }),
         end: true,
       });
@@ -119,11 +150,14 @@ async function saveTracedTurn(
   });
 
   const stepTimingsMs = new Map<string, number>();
+  const observations: TraceObservation[] = [];
+  let observationsFlushed = false;
+  let observationFailures = 0;
   const promptCapture = { value: supportSystemPrompt };
   let historyMessages: Awaited<ReturnType<typeof priorContext>>["messages"] = [];
 
   try {
-    return await withTurnTraceContext({ rootRunId, stepTimingsMs }, async () => {
+    return await withTurnTraceContext({ rootRunId, stepTimingsMs, observations, nextObservationSequence: 0 }, async () => {
       const insertCustomerStarted = performance.now();
       await insertRow(input.messages, {
         sessionId: turn.sessionId,
@@ -192,6 +226,8 @@ async function saveTracedTurn(
       });
       const traceOutput = buildTraceOutput(completion);
       const finalizedStepTimingsMs = Object.fromEntries(stepTimingsMs);
+      observationsFlushed = true;
+      observationFailures = await input.tracing.flushObservations(rootRunId, observations);
       await input.tracing.finalizeRootRun({
         rootRunId,
         sessionId: turn.sessionId,
@@ -199,6 +235,8 @@ async function saveTracedTurn(
         traceInput,
         traceOutput,
         stepTimingsMs: finalizedStepTimingsMs,
+        observationFailures,
+        ...usageCompleteness(observations, observationFailures),
       });
 
       return {
@@ -218,6 +256,9 @@ async function saveTracedTurn(
       waitingCalls: [],
       chunkPlans: [],
     };
+    if (!observationsFlushed) {
+      observationFailures = await input.tracing.flushObservations(rootRunId, observations);
+    }
     await input.tracing.finalizeRootRun({
       rootRunId,
       sessionId: turn.sessionId,
@@ -231,10 +272,25 @@ async function saveTracedTurn(
       }),
       traceOutput: emptyOutput,
       stepTimingsMs: Object.fromEntries(stepTimingsMs),
+      observationFailures,
+      ...usageCompleteness(observations, observationFailures),
       error: message,
     });
     throw error;
   }
+}
+
+function usageCompleteness(observations: readonly TraceObservation[], observationFailures: number): {
+  readonly providerCalls: number;
+  readonly tokenUsageComplete: boolean;
+  readonly costUsageComplete: boolean;
+} {
+  const providers = observations.filter((observation) => observation.kind === "model" || observation.kind === "embedding");
+  return {
+    providerCalls: providers.length,
+    tokenUsageComplete: providers.length > 0 && observationFailures === 0 && providers.every((observation) => observation.usage?.totalTokens !== undefined),
+    costUsageComplete: providers.length > 0 && observationFailures === 0 && providers.every((observation) => observation.usage?.totalCost !== undefined),
+  };
 }
 
 function captureSystemPrompt(
