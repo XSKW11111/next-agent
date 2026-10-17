@@ -140,6 +140,87 @@ test("a traced tool round stores the chunk plan and tool result", async () => {
   ]);
   expect(view.output.toolResults).toHaveLength(1);
   expect(view.output.toolResults[0]?.tool).toBe("search_products");
+  const root = client.runs.get(result.langsmithRunId);
+  const tool = client.runs.get(root?.children[0] ?? "");
+  expect(tool).toMatchObject({ name: "search_products", runType: "tool", inputs: { callId: "search-1" }, outputs: { outcome: "success" } });
+  expect(tool?.children).toEqual([]);
+});
+
+test("a child trace write failure preserves the saved reply and executes a tool once", async () => {
+  const messages = memoryMessages();
+  const base = memoryLangSmithRunsPort();
+  let childWrites = 0;
+  let productLists = 0;
+  const tracing = createTurnTracingSession({
+    config: { apiKey: "test", project: "unit" },
+    client: { ...base, async writeObservation() { childWrites += 1; throw new Error("trace unavailable"); } },
+  });
+  let modelCalls = 0;
+  const result = await submitTracedTurn({
+    sessionId, turnId, text: "show products", messages, tracing,
+    model: { async complete() {
+      modelCalls += 1;
+      return modelCalls === 1
+        ? { text: "Looking.", toolCalls: [{ id: "search-1", name: "search_products", args: { mode: "list" } }] }
+        : { text: "Here are products." };
+    } },
+    dependencies: {
+      ...dependencies(),
+      products: {
+        ...productDependencies(),
+        catalog: { async matchProducts() { return []; }, async listProducts() { productLists += 1; return []; } },
+      },
+    },
+  });
+  expect(result.kind).toBe("reply");
+  if (result.kind !== "reply" || result.langsmithRunId === null) throw new Error("expected traced reply");
+  expect(result.reply).toBe("Here are products.");
+  expect(productLists).toBe(1);
+  expect(childWrites).toBe(1);
+  expect(messages.rows().filter((row) => row.role === "assistant")).toHaveLength(1);
+  expect(base.runs.get(result.langsmithRunId)?.extra).toMatchObject({ observationFailures: 1 });
+});
+
+test("a failed model after a tool still flushes completed tool spans", async () => {
+  const messages = memoryMessages();
+  const client = memoryLangSmithRunsPort();
+  const tracing = createTurnTracingSession({ config: { apiKey: "test", project: "unit" }, client });
+  let modelCalls = 0;
+  await expect(submitTracedTurn({
+    sessionId, turnId, text: "show products", messages, tracing, dependencies: dependencies(),
+    model: { async complete() {
+      modelCalls += 1;
+      if (modelCalls === 1) return { text: "Looking.", toolCalls: [{ id: "search-1", name: "search_products", args: { mode: "list" } }] };
+      throw new Error("model unavailable");
+    } },
+  })).rejects.toThrow("model unavailable");
+  const root = [...client.runs.values()].find((run) => run.parentRunId === null);
+  const child = [...client.runs.values()].find((run) => run.parentRunId === root?.id);
+  expect(root?.error).toBe("model unavailable");
+  expect(child).toMatchObject({ name: "search_products", inputs: { callId: "search-1" }, outputs: { outcome: "success" } });
+  expect(root?.extra).toMatchObject({ observationFailures: 0 });
+});
+
+test("tool child spans omit customer arguments and returned data", async () => {
+  const client = memoryLangSmithRunsPort();
+  const tracing = createTurnTracingSession({ config: { apiKey: "test", project: "unit" }, client });
+  let modelCalls = 0;
+  const result = await submitTracedTurn({
+    sessionId, turnId, text: "private customer question", messages: memoryMessages(), tracing,
+    model: { async complete() {
+      modelCalls += 1;
+      return modelCalls === 1
+        ? { text: "Checking.", toolCalls: [{ id: "lookup-1", name: "lookup_order", args: { email: "secret-marker@example.com", order_number: "#W123" } }] }
+        : { text: "Done." };
+    } },
+    dependencies: dependencies(),
+  });
+  if (result.kind !== "reply" || result.langsmithRunId === null) throw new Error("expected traced reply");
+  const root = client.runs.get(result.langsmithRunId);
+  const child = client.runs.get(root?.children[0] ?? "");
+  expect(child).toMatchObject({ name: "lookup_order", inputs: { callId: "lookup-1" }, outputs: { outcome: "success" } });
+  expect(JSON.stringify({ inputs: child?.inputs, outputs: child?.outputs, extra: child?.extra })).not.toMatch(/secret-marker|#W123|private customer question/);
+  expect(result.reply).toBe("Done.");
 });
 
 test("a second turn includes the first completed pair in the trace input", async () => {

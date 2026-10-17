@@ -1,5 +1,6 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { z } from "zod";
+import { observeTool } from "../../infra/langsmith/turn-trace-context";
 import { handoffResultSchema, type HandoffResult } from "../../domain/handoff";
 import { parse } from "../../domain/parse";
 import {
@@ -424,7 +425,7 @@ function routeAfterTools(state: TurnChannels, ready: ReadyTurn): "tools" | "agen
 }
 
 function runCall(call: ModelToolCall, ready: ReadyTurn): Promise<unknown> {
-  return runSupportTool({
+  return observeTool(call.name, call.id, () => runSupportTool({
     name: call.name,
     args: call.args,
     sessionId: ready.sessionId,
@@ -436,7 +437,7 @@ function runCall(call: ModelToolCall, ready: ReadyTurn): Promise<unknown> {
     ...(ready.maxProductCandidates === undefined
       ? {}
       : { maxProductCandidates: ready.maxProductCandidates }),
-  });
+  }));
 }
 
 function latestUnmatched(
