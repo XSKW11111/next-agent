@@ -3,12 +3,8 @@ import type { ChatRuntime } from "@/app/api/chat/runtime";
 import { parseSession, type Session } from "@/domain/session";
 import type { Proposal, SupportCase } from "@/domain/handoff";
 import { parseAgentConfig } from "@/infra/agent-config";
-import { parseDebugTraceConfig } from "@/infra/langsmith/debug-trace-config";
-import {
-  createLangSmithRunsPort,
-  memoryLangSmithRunsPort,
-} from "@/infra/langsmith/langsmith-runs-port";
-import { localObservabilityStore } from "@/infra/local-observability-store";
+import { parseLangSmithTraceConfig, parseTerminalObservability } from "@/infra/langsmith/trace-config";
+import { createLangSmithRunsPort } from "@/infra/langsmith/langsmith-runs-port";
 import { openRouterModel } from "@/infra/open-router-model";
 import { createAgentSupabase } from "@/infra/supabase";
 import { openRouterEmbedder, supabaseEarlyRisers, supabaseOrderCatalog, supabaseProductCatalog } from "@/infra/supabase-catalog";
@@ -29,19 +25,18 @@ export function liveChatRuntime(
   }
   const client = createAgentSupabase(parsed.value);
   const proposals = memoryProposals();
-  const debug = parseDebugTraceConfig(env);
-  if (!debug.ok) {
-    throw new Error(`debug trace config is invalid: ${debug.names.join(", ")}`);
+  const tracingConfig = parseLangSmithTraceConfig(env);
+  if (!tracingConfig.ok) {
+    throw new Error(`LangSmith trace config is invalid: ${tracingConfig.names.join(", ")}`);
   }
-  const turnTracing = debug.value.enabled
-    ? createTurnTracingSession({
-        config: debug.value,
-        client:
-          debug.value.sink === "langsmith"
-            ? createLangSmithRunsPort(debug.value)
-            : memoryLangSmithRunsPort(),
-      })
-    : undefined;
+  const terminal = parseTerminalObservability(env);
+  if (!terminal.ok) {
+    throw new Error(`terminal observability config is invalid: ${terminal.names.join(", ")}`);
+  }
+  const turnTracing = createTurnTracingSession({
+    config: tracingConfig.value,
+    client: createLangSmithRunsPort(tracingConfig.value),
+  });
   return {
     config: parsed.value,
     sessions: supabaseSessions(client),
@@ -49,8 +44,8 @@ export function liveChatRuntime(
     proposals,
     toolCards: memoryToolCardStore(),
     model: openRouterModel(parsed.value, fetchImpl ?? fetch),
-    observability: localObservabilityStore(),
-    ...(turnTracing === undefined ? {} : { turnTracing }),
+    turnTracing,
+    terminalObservability: terminal.value,
     dependencies: {
       orders: {
         catalog: supabaseOrderCatalog(client),

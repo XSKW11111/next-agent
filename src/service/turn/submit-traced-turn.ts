@@ -1,24 +1,23 @@
 import type { SupportTurnTraceInput, SupportTurnTraceOutput } from "../../domain/support-turn-trace";
 import { parseTurn, type Turn } from "../../domain/turn";
-import type { DebugTraceConfig } from "../../infra/langsmith/debug-trace-config";
+import type { LangSmithTraceConfig } from "../../infra/langsmith/trace-config";
 import type { LangSmithRunsPort } from "../../infra/langsmith/langsmith-runs-port";
 import { withTurnTraceContext } from "../../infra/langsmith/turn-trace-context";
 import {
   runSupportTurn,
   type ScriptedModel,
-  type SupportTurnDependencies,
   type TurnCompletion,
 } from "../agent/support-turn";
 import { supportSystemPrompt } from "../agent/prompts/system";
 import { buildTraceInput, buildTraceOutput } from "../trace/build-trace-io";
-import { customerToolCards, type ToolCardStore } from "../tool/customer-tool-cards";
+import { customerToolCards } from "../tool/customer-tool-cards";
 import type { MessageStore, TurnMessage } from "./message-store";
 import { priorContext } from "./prior-messages";
 import { logStep } from "./step-log";
 import type { SubmitTurnInput } from "./submit-turn";
 
 export type TurnTracingSession = {
-  readonly config: DebugTraceConfig;
+  readonly config: LangSmithTraceConfig;
   readonly client: LangSmithRunsPort;
   readonly beginRootRun: (input: {
     readonly sessionId: string;
@@ -26,6 +25,8 @@ export type TurnTracingSession = {
   }) => Promise<{ readonly rootRunId: string }>;
   readonly finalizeRootRun: (input: {
     readonly rootRunId: string;
+    readonly sessionId: string;
+    readonly turnId: string;
     readonly traceInput: SupportTurnTraceInput;
     readonly traceOutput: SupportTurnTraceOutput;
     readonly stepTimingsMs: Readonly<Record<string, number>>;
@@ -40,6 +41,7 @@ export type SubmitTracedTurnResult =
       readonly langsmithRunId: string;
       readonly completion: TurnCompletion;
       readonly traceInput: SupportTurnTraceInput;
+      readonly stepTimingsMs: Readonly<Record<string, number>>;
     }
   | { readonly kind: "reply"; readonly reply: string; readonly langsmithRunId: null }
   | { readonly kind: "rejected" }
@@ -50,7 +52,7 @@ export type SubmitTracedTurnInput = Omit<SubmitTurnInput, never> & {
 };
 
 export function createTurnTracingSession(input: {
-  readonly config: DebugTraceConfig;
+  readonly config: LangSmithTraceConfig;
   readonly client: LangSmithRunsPort;
 }): TurnTracingSession {
   return {
@@ -62,7 +64,7 @@ export function createTurnTracingSession(input: {
         project: input.config.project,
         sessionId,
         turnId,
-        tags: ["next-agent", "debug-trace"],
+        tags: ["next-agent", "support-turn"],
       });
       return { rootRunId: runId };
     },
@@ -70,7 +72,7 @@ export function createTurnTracingSession(input: {
       await input.client.patchRun(finalize.rootRunId, {
         inputs: finalize.traceInput,
         outputs: finalize.traceOutput,
-        extra: { stepTimingsMs: finalize.stepTimingsMs },
+        extra: { sessionId: finalize.sessionId, turnId: finalize.turnId, stepTimingsMs: finalize.stepTimingsMs },
         ...(finalize.error === undefined ? {} : { error: finalize.error }),
         end: true,
       });
@@ -82,10 +84,6 @@ export function createTurnTracingSession(input: {
 export async function submitTracedTurn(
   input: SubmitTracedTurnInput,
 ): Promise<SubmitTracedTurnResult> {
-  if (!input.tracing.config.enabled) {
-    throw new Error("submitTracedTurn requires debug tracing to be enabled");
-  }
-
   const turn = parseTurn({
     id: input.turnId,
     sessionId: input.sessionId,
@@ -192,11 +190,15 @@ async function saveTracedTurn(
         summaryText: completion.contextSummary?.summary ?? null,
         timezone: input.dependencies.promotion.session.localTimezone,
       });
+      const traceOutput = buildTraceOutput(completion);
+      const finalizedStepTimingsMs = Object.fromEntries(stepTimingsMs);
       await input.tracing.finalizeRootRun({
         rootRunId,
+        sessionId: turn.sessionId,
+        turnId: turn.id,
         traceInput,
-        traceOutput: buildTraceOutput(completion),
-        stepTimingsMs: Object.fromEntries(stepTimingsMs),
+        traceOutput,
+        stepTimingsMs: finalizedStepTimingsMs,
       });
 
       return {
@@ -205,6 +207,7 @@ async function saveTracedTurn(
         langsmithRunId: rootRunId,
         completion,
         traceInput,
+        stepTimingsMs: finalizedStepTimingsMs,
       };
     });
   } catch (error) {
@@ -217,6 +220,8 @@ async function saveTracedTurn(
     };
     await input.tracing.finalizeRootRun({
       rootRunId,
+      sessionId: turn.sessionId,
+      turnId: turn.id,
       traceInput: buildTraceInput({
         systemPrompt: promptCapture.value,
         priorMessages: historyMessages,

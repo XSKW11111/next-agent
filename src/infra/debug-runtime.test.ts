@@ -14,37 +14,23 @@ const validEnv = {
   CONTEXT_WINDOW_TOKENS: "128000",
   CONTEXT_HARD_TOKENS: "120000",
   NEXT_AGENT_DEBUG_TOOL_DETAILS: "false",
-  NEXT_AGENT_DEBUG_TRACE: "true",
   LANGSMITH_API_KEY: "ls-test",
   LANGSMITH_PROJECT: "unit-tests",
 };
 
 describe("debugChatRuntime", () => {
-  test("fails when tracing is off", () => {
+  test("requires LangSmith settings even for an eval host", () => {
     expect(() =>
       debugChatRuntimeForTests({
         ...validEnv,
-        NEXT_AGENT_DEBUG_TRACE: "false",
+        LANGSMITH_API_KEY: "",
       }),
-    ).toThrow("NEXT_AGENT_DEBUG_TRACE=true");
-  });
-
-  test("uses the local sink when LangSmith keys are missing", () => {
-    const runtime = debugChatRuntimeForTests({
-      ...validEnv,
-      LANGSMITH_API_KEY: "",
-      LANGSMITH_PROJECT: "",
-    });
-    expect(runtime.turnTracing.config).toMatchObject({
-      enabled: true,
-      sink: "local",
-      project: "local",
-    });
+    ).toThrow("LANGSMITH_API_KEY");
   });
 
   test("overlays the order-outage catalog", async () => {
     const runtime = debugChatRuntimeForTests(validEnv, { orderCase: "order-outage" });
-    expect(runtime.turnTracing.config.enabled).toBe(true);
+    expect(runtime.turnTracing.config.project).toBe("unit-tests");
     const email = parse(orderEmailSchema, "jane.smith@example.com");
     expect(email.ok).toBe(true);
     if (!email.ok) return;

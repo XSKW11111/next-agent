@@ -1,11 +1,11 @@
 ---
 name: verify-next-agent
-description: Verify the next-agent support chat in a browser, including sends, stored history, tracing, and latency. Use for support-page or debug-turn verification.
+description: Verify the next-agent support chat in a browser, including sends, stored history, LangSmith tracing, and latency.
 ---
 
 # Verify next-agent
 
-next-agent's customer surface is the support chat in the browser. A customer opens the page, types a message, and reads the reply. Operators can inspect saved latency and trace receipts at `/debug/turns`. The checkout also serves JSON routes for health, session create, history, handoff decisions, and debug receipts.
+next-agent's customer surface is the support chat in the browser. A customer opens the page, types a message, and reads the reply. New turns report traces to LangSmith. The checkout also serves JSON routes for health, session create, history, and handoff decisions.
 
 The page that only renders the text `next-agent` is not this surface. Drive a checkout whose `src/app/chat-panel.tsx` exists.
 
@@ -37,7 +37,9 @@ The check is read-only. It passes only when the recorded pid is alive, health re
 
 Choose the feature IDs that exercise the PR's changes. A baseline chat send alone verifies baseline chat, not evaluation, tracing, or overflow behavior. Use a browser against `http://127.0.0.1:<port>/`. Prefer the accessible names below. Do not click by coordinates.
 
-For every sent turn, follow [the observability checks](references/observability.md): record browser-visible latency from the same send, inspect the matching server request timing, and check whether the selected route is traced. A debug trace requires a separate trace receipt; a passing chat POST or trace unit test does not prove one exists. These checks reuse the send instead of starting a costly evaluation suite.
+For every sent turn, follow [the observability checks](references/observability.md): record browser-visible latency from the same send, inspect the matching server request timing, and read back the corresponding LangSmith root run. A passing chat POST or trace unit test does not prove external trace delivery. These checks reuse the send instead of starting a costly evaluation suite.
+
+When the target is a Vercel deployment, also follow [the Vercel deployment and server-log checks](references/vercel-deployment.md). Treat this as a separate environment from the isolated local server: identify and monitor the intended `next-agent` deployment, then correlate the browser send with Vercel request and runtime logs. Missing CLI access, project linkage, deployment selection, or log records is a blocked/unverified result, not a pass. For Supabase persistence evidence, use [the Supabase log and database checks](references/supabase-observability.md).
 
 - Heading `Support chat`.
 - Textbox named `Message`.
@@ -61,7 +63,7 @@ A pending handoff renders an A2UI card from `src/app/handoff-card.tsx` with Conf
 
 Write proof under `/tmp/next-agent-verify/<run-id>/evidence/`. Cleanup must not delete that directory.
 
-For a UI proof, save the browser state after opening, after the customer clicks `Send`, and after the reply. Save a final accessibility snapshot and screenshot that show `Support chat`, the customer text, and the reply, plus the history JSON from the GET above. Record the browser session id, request status, `revision`, latency observations, and trace verdict with the proof. These link the action, rendered result, stored turn, and tested commit.
+For a UI proof, save the browser state after opening, after the customer clicks `Send`, and after the reply. Save a final accessibility snapshot and screenshot that show `Support chat`, the customer text, and the reply, plus the history JSON from the GET above. Record the browser session id, request status, `revision`, latency observations, and trace verdict with the proof. These link the action, rendered result, stored turn, and tested commit. For Vercel runs, include the deployment/log evidence described in [the Vercel checks](references/vercel-deployment.md); do not treat local `server.log` as evidence about the deployed runtime. When Supabase is the backing store, include the bounded log or read-back evidence described in [the Supabase checks](references/supabase-observability.md).
 
 Do not prove the chat by calling test-only setters. `POST /api/chat/sessions` and the message route are the same routes the page calls. A curl of those routes can confirm a side effect after the browser send. A curl that never uses the page does not prove the page.
 

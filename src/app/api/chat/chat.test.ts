@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { AgentConfig } from "@/infra/agent-config";
 import { orderNumberSchema } from "../../../domain/order";
 import { parse, type Parsed } from "../../../domain/parse";
@@ -10,7 +10,7 @@ import {
 } from "../../../domain/session";
 import { parseTurn } from "../../../domain/turn";
 import type { Proposal, SupportCase } from "../../../domain/handoff";
-import type { TurnObservabilityRecord } from "../../../domain/turn-observability";
+import { memoryLangSmithRunsPort } from "../../../infra/langsmith/langsmith-runs-port";
 import { captureHandoff, type ProposalStore } from "../../../service/business/handoff/handoff";
 import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../../../service/business/order/lookup-order";
 import type { ProductSearchDependencies } from "../../../service/business/product/search-products";
@@ -18,6 +18,7 @@ import type { EarlyRisersCodeStore } from "../../../service/business/promotion/c
 import type { ScriptedModel, SupportMessage, SupportTurnDependencies } from "../../../service/agent/support-turn";
 import { memoryToolCardStore } from "../../../service/tool/customer-tool-cards";
 import type { MessageStore, SequenceUpdate, TurnMessage } from "../../../service/turn/message-store";
+import { createTurnTracingSession } from "../../../service/turn/submit-traced-turn";
 import { POST as createSession } from "./sessions/route";
 import { GET as readMessages, POST as sendMessage } from "./sessions/[id]/messages/route";
 import { POST as confirmProposal } from "./sessions/[id]/handoffs/[proposalId]/confirm/route";
@@ -91,6 +92,81 @@ test("the same turn id and the same text returns the saved reply", async () => {
   expect(second.status).toBe(200);
   expect(await replyText(second)).toBe("On the way.");
   expect(calls.count).toBe(1);
+});
+
+test("a send with terminal observations off still records LangSmith timings", async () => {
+  const runtime = await startedRuntime(replyModel({ count: 0 }, "On the way."));
+  const log = vi.spyOn(console, "info").mockImplementation(() => {});
+  try {
+    const response = await sendMessage(
+      jsonRequest({ turnId, text: "where is my order" }),
+      sessionContext(sessionId),
+      runtime,
+    );
+    expect(response.status).toBe(200);
+    expect(await replyText(response)).toBe("On the way.");
+    expect(log).not.toHaveBeenCalled();
+    const run = await runtime.testRuns.readRunTree([...runtime.testRuns.runs.keys()][0] ?? "");
+    expect(run).toMatchObject({ extra: { stepTimingsMs: { "support-graph": expect.any(Number) } } });
+  } finally {
+    log.mockRestore();
+  }
+});
+
+test("terminal observations include safe latency and trace metadata when enabled", async () => {
+  const base = await startedRuntime(replyModel({ count: 0 }, "On the way."));
+  const client = memoryLangSmithRunsPort();
+  const runtime: ChatRuntime = {
+    ...base,
+    turnTracing: createTurnTracingSession({
+      config: { apiKey: "test", project: "unit" },
+      client: {
+        ...client,
+        async readRunTree() {
+          throw new Error("remote run is not visible yet");
+        },
+      },
+    }),
+    terminalObservability: true,
+  };
+  const log = vi.spyOn(console, "info").mockImplementation(() => {});
+  try {
+    const response = await sendMessage(
+      jsonRequest({ turnId, text: "where is my order" }),
+      sessionContext(sessionId),
+      runtime,
+    );
+    expect(response.status).toBe(200);
+    expect(await replyText(response)).toBe("On the way.");
+    const runId = [...client.runs.keys()][0];
+    expect(client.runs.get(runId ?? "")?.extra).toMatchObject({
+      sessionId,
+      turnId,
+      stepTimingsMs: {
+      "insert-customer": expect.any(Number),
+      "prior-context": expect.any(Number),
+      "support-graph": expect.any(Number),
+      "insert-assistant": expect.any(Number),
+      },
+    });
+    const completed = log.mock.calls.filter(([line]) =>
+      typeof line === "string" && line.includes('"event":"chat.turn.completed"'),
+    );
+    expect(completed).toHaveLength(1);
+    const entry: unknown = JSON.parse(String(completed[0]?.[0]));
+    expect(entry).toEqual({
+      event: "chat.turn.completed",
+      sessionId,
+      turnId,
+      outcome: "reply",
+      serverLatencyMs: expect.any(Number),
+      traceId: runId,
+      stepTimingsMs: client.runs.get(runId ?? "")?.extra.stepTimingsMs,
+    });
+    expect(JSON.stringify(entry)).not.toContain("where is my order");
+  } finally {
+    log.mockRestore();
+  }
 });
 
 test("nine product searches store one assistant reply and a retry does not run them again", async () => {
@@ -407,6 +483,7 @@ async function startedRuntime(
 }
 
 type TestRuntime = ChatRuntime & {
+  testRuns: ReturnType<typeof memoryLangSmithRunsPort>;
   sessions: SessionStore & { saved(): readonly Session[] };
   messages: MessageStore & { saved(): readonly TurnMessage[] };
   proposals: ProposalStore & { cases(): SupportCase[] };
@@ -420,6 +497,7 @@ function chatRuntime(
 ): TestRuntime {
   const remaining = [...ids];
   const proposals = fakeProposalStore();
+  const testRuns = memoryLangSmithRunsPort();
   return {
     config: testConfig,
     sessions: memorySessions(),
@@ -427,39 +505,14 @@ function chatRuntime(
     proposals,
     toolCards: memoryToolCardStore(),
     model,
-    observability: memoryObservability(),
+    testRuns,
+    turnTracing: createTurnTracingSession({ config: { apiKey: "test", project: "unit" }, client: testRuns }),
+    terminalObservability: false,
     dependencies: dependencies(proposals, orders, products),
     newSessionId() {
       const id = remaining.shift();
       if (id === undefined) throw new Error("test fixture ran out of session ids");
       return id;
-    },
-  };
-}
-
-function memoryObservability(): ChatRuntime["observability"] {
-  const records = new Map<string, TurnObservabilityRecord>();
-  return {
-    async save(record) {
-      records.set(record.id, record);
-    },
-    async list() {
-      return [...records.values()]
-        .sort((left, right) => right.savedAt.localeCompare(left.savedAt))
-        .map((record) => ({
-          id: record.id,
-          sessionId: record.sessionId,
-          turnId: record.turnId,
-          savedAt: record.savedAt,
-          currentSentence: record.currentSentence,
-          reply: record.reply,
-          serverLatencyMs: record.serverLatencyMs,
-          hasTrace: record.trace !== null,
-          sink: record.sink,
-        }));
-    },
-    async get(id) {
-      return records.get(id);
     },
   };
 }

@@ -24,7 +24,7 @@ This directory is the maintained source for verifying the support chat. Read the
 - Capture the customer action and the resulting transcript, not only the final screen.
 - UI proof includes an accessibility snapshot and a screenshot that show `Support chat`.
 - A sent message also needs the history JSON for that session id.
-- Each send records latency and a tracing verdict using [observability checks](../references/observability.md). A missing debug trace is not a passing trace check.
+- Each send records latency and a tracing verdict using [observability checks](../references/observability.md). A missing LangSmith root run is not a passing trace check.
 - Record the feature id with every artifact.
 - Report an unreachable path with the attempted step and the unmet precondition. Mark a path untested when its trigger did not occur in this run.
 - Do not report a skipped entry point as verified through a different path.
@@ -48,4 +48,3 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Recommend a product](./search-products.md) covers `search_products`.
 - [Claim the early risers promotion](./claim-promotion.md) covers `claim_early_risers`.
 - [Confirm or cancel a handoff](./handoff-card.md) covers `capture_handoff` and the Confirm and Cancel card. The card stays unreachable until a turn returns `data-proposal`.
-- [Inspect saved debug turns](./debug-turns.md) covers the operator viewer at `/debug/turns`, including latency receipts and optional trace detail.
