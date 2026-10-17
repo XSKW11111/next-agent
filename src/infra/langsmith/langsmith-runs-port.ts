@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Client } from "langsmith";
-import type { DebugTraceConfig } from "./debug-trace-config";
+import type { LangSmithTraceConfig } from "./trace-config";
 
 export type LangSmithRunsPort = {
   createRootRun(input: {
@@ -107,10 +107,7 @@ export function memoryLangSmithRunsPort(): LangSmithRunsPort & {
   };
 }
 
-export function createLangSmithRunsPort(config: DebugTraceConfig): LangSmithRunsPort {
-  if (!config.enabled) {
-    throw new Error("LangSmith runs port requires debug tracing to be enabled");
-  }
+export function createLangSmithRunsPort(config: LangSmithTraceConfig): LangSmithRunsPort {
   const client = new Client({ apiKey: config.apiKey });
   return {
     async createRootRun(input) {

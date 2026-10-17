@@ -1,20 +1,18 @@
 # Observability checks
 
-Use these checks with the feature recipe for the same browser turn. Keep the tested revision, session id, turn id, synthetic prompt, model name, and run mode with the evidence. Do not save keys or service-role credentials.
+Use the same synthetic browser turn for latency and LangSmith checks. Keep the tested revision, deployment or server origin, session id, turn id, prompt, model, and UTC send time. Never save API keys or private customer data.
 
 ## Latency of a customer send
 
-1. Open the page before timing so the first Next.js page compilation is not counted as send latency. Record whether the server and model are cold or warm.
-2. Start a monotonic timer immediately before choosing `Send`. Capture the first visible assistant text and final reply with `Send` enabled. Record click-to-first-visible-text and click-to-complete in milliseconds, including browser-driver observation delay. If the driver cannot observe first text reliably, use `null`; do not substitute total time.
-3. Save the matching `POST /api/chat/sessions/<session-id>/messages ... in <ms>` line from this run's `server.log`, with its HTTP status. This is server request time, not browser-visible latency. Compare it with the same turn's local receipt in `GET /api/debug/turns`.
-4. Save `evidence/latency.json` with revision, session/turn id, prompt, model name, run mode, cold/warm state, measurement method, observed times, server request time, and status. Use `null` for unavailable measurements.
+1. Open the page before timing so the first page compilation is excluded. Record whether the server and model are cold or warm.
+2. Start a monotonic timer immediately before choosing `Send`. Record click-to-first-visible-text and click-to-complete in milliseconds. Use `null` when first text cannot be observed reliably.
+3. Save the matching server request time from `server.log` for local runs or Vercel request records for deployed runs. This request time differs from browser-visible latency.
+4. Save `evidence/latency.json` with revision, session and turn ids, model, run mode, cold/warm state, method, observed times, request time, and status. Use `null` for unavailable measurements. Do not invent an SLA or call one sample a p95.
 
-A successful send with valid, nonnegative measurements passes the measurement check. There is no customer latency target here; do not invent an SLA or call one sample a p95. A regression claim needs repeated comparable runs on pinned revisions.
+## LangSmith tracing
 
-## Tracing
-
-1. Inspect `src/app/api/chat/sessions/[id]/messages/route.ts` in the tested checkout. The browser route chooses `submitTracedTurn` when `NEXT_AGENT_DEBUG_TRACE=true`; otherwise it uses `submitTurn`. Record the actual flag and sink for this process. `NEXT_AGENT_DEBUG_TRACE=true` with LangSmith key and project uses LangSmith; without them it uses the local sink. Keys are not required for a local root trace.
-2. Run `npm test -- src/service/turn/submit-traced-turn.test.ts src/infra/debug-runtime.test.ts src/infra/langsmith/debug-trace-config.test.ts` for the trace contract. Save the command and result under `evidence/tracing/contract.txt`. A unit pass does not prove the browser route.
-3. For live route proof, send one synthetic turn through the page on the traced server. `GET /api/debug/turns` must return a receipt for its turn id with `hasTrace: true`; `GET /api/debug/turns/<receipt-id>` must include the root trace. The `/debug/turns` viewer must show the same turn and trace. A 200 chat POST alone does not prove tracing.
-4. Inspect the root trace: `input.currentSentence` matches the prompt; `input.priorTurns` contains only completed earlier turns; `input.timezone` is resolved or explicitly unresolved; `output.assistantLine` matches the stored reply; tool results, waiting calls, and chunk plans match what ran; `stepTimingsMs` has finite, nonnegative values for `insert-customer`, `prior-context`, `support-graph`, and `insert-assistant`. Tool-free turns legitimately have empty tool arrays. Confirm one root for one new turn and no second root on a same-turn retry. Check redaction without printing secrets.
-5. Save a redacted receipt and trace detail under `evidence/tracing/`. Distinguish **browser route**, **in-memory contract**, and **external LangSmith delivery** in the verdict. Local receipt proof does not establish LangSmith delivery; a LangSmith URL alone does not prove trace fields.
+1. Confirm `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` are configured for the tested server without printing their values. The message route always calls `submitTracedTurn` for a new turn. Missing configuration is a failure, not a local fallback.
+2. Run `npm test -- src/service/turn/submit-traced-turn.test.ts src/infra/debug-runtime.test.ts src/infra/langsmith/trace-config.test.ts` and save the result under `evidence/tracing/contract.txt`. A unit pass does not prove external delivery.
+3. Send one synthetic turn through the page. In the configured LangSmith project, find its `support-turn` root run by UTC time and `extra.sessionId` plus `extra.turnId`. Read back the root run. A successful chat POST alone does not prove LangSmith received it. If the run has not appeared, retry readback for a bounded interval and mark it unverified if still absent.
+4. Compare `inputs.currentSentence` with the sent prompt; `inputs.priorTurns` with completed earlier turns; `outputs.assistantLine` with the stored reply; and tool results, waiting calls, and chunk plans with the observed path. Confirm `extra.stepTimingsMs` contains finite, nonnegative `insert-customer`, `prior-context`, `support-graph`, and `insert-assistant` values. Tool-free turns have empty tool arrays. A same-turn retry should not create another root run.
+5. Save a redacted readback under `evidence/tracing/` and state separately whether the browser route, in-memory contract, and external LangSmith delivery passed. LangSmith root duration and step timings describe server work within the run; browser click-to-complete also includes transport and rendering. Optional terminal observations use `NEXT_AGENT_TERMINAL_OBSERVABILITY=true` outside production and print only IDs and latency metadata. Production always suppresses them.

@@ -12,6 +12,8 @@ const validEnv = {
   CONTEXT_WINDOW_TOKENS: "128000",
   CONTEXT_HARD_TOKENS: "120000",
   NEXT_AGENT_DEBUG_TOOL_DETAILS: "false",
+  LANGSMITH_API_KEY: "test-langsmith-key",
+  LANGSMITH_PROJECT: "next-agent-test",
 };
 
 describe("liveChatRuntime", () => {

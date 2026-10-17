@@ -1,7 +1,7 @@
 /**
  * Live eval against the debug environment.
  *
- * Requires NEXT_AGENT_DEBUG_TRACE=true, LANGSMITH_API_KEY, LANGSMITH_PROJECT,
+ * Requires LANGSMITH_API_KEY, LANGSMITH_PROJECT,
  * and the usual agent config. Point LIVE_EVAL_BASE at a debug-configured Next
  * server when using HTTP mode (default). Trace ids stay empty over HTTP until
  * the messages route exposes them; prefer in-process mode for full C3 fields:

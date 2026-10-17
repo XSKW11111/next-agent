@@ -1,9 +1,8 @@
 import type { ChatRuntime } from "@/app/api/chat/runtime";
 import { parseAgentConfig } from "@/infra/agent-config";
 import { debugOrderCatalog, type DebugOrderCase } from "@/infra/debug-catalog";
-import { parseDebugTraceConfig } from "@/infra/langsmith/debug-trace-config";
+import { parseLangSmithTraceConfig } from "@/infra/langsmith/trace-config";
 import {
-  createLangSmithRunsPort,
   memoryLangSmithRunsPort,
   type LangSmithRunsPort,
 } from "@/infra/langsmith/langsmith-runs-port";
@@ -23,10 +22,7 @@ export type DebugChatRuntime = ChatRuntime & {
   readonly turnTracing: TurnTracingSession;
 };
 
-/**
- * Debug / eval host entry. Requires NEXT_AGENT_DEBUG_TRACE=true.
- * Uses LangSmith when keys are set; otherwise an in-memory runs port (local sink).
- */
+/** Debug / eval host entry with an injectable runs port for tests. */
 export function debugChatRuntime(
   env: Readonly<Record<string, string | undefined>>,
   overrides?: DebugCatalogOverrides,
@@ -36,12 +32,9 @@ export function debugChatRuntime(
   if (!agent.ok) {
     throw new Error(`agent config is invalid: ${agent.names.join(", ")}`);
   }
-  const debug = parseDebugTraceConfig(env);
-  if (!debug.ok) {
-    throw new Error(`debug trace config is invalid: ${debug.names.join(", ")}`);
-  }
-  if (!debug.value.enabled) {
-    throw new Error("debugChatRuntime requires NEXT_AGENT_DEBUG_TRACE=true");
+  const tracingConfig = parseLangSmithTraceConfig(env);
+  if (!tracingConfig.ok) {
+    throw new Error(`LangSmith trace config is invalid: ${tracingConfig.names.join(", ")}`);
   }
 
   const base = liveChatRuntime(env);
@@ -51,13 +44,9 @@ export function debugChatRuntime(
       ? base.dependencies.orders.catalog
       : debugOrderCatalog(overrides.orderCase));
 
-  const client =
-    options?.runsPort ??
-    (debug.value.sink === "langsmith"
-      ? createLangSmithRunsPort(debug.value)
-      : memoryLangSmithRunsPort());
+  const client = options?.runsPort ?? base.turnTracing.client;
   const turnTracing = createTurnTracingSession({
-    config: debug.value,
+    config: tracingConfig.value,
     client,
   });
 
@@ -74,7 +63,7 @@ export function debugChatRuntime(
   };
 }
 
-/** Unit-test helper: same gate as debugChatRuntime with an in-memory runs port. */
+/** Unit-test helper with an in-memory runs port. */
 export function debugChatRuntimeForTests(
   env: Readonly<Record<string, string | undefined>>,
   overrides?: DebugCatalogOverrides,
