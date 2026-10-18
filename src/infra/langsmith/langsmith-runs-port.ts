@@ -84,7 +84,7 @@ export function memoryLangSmithRunsPort(): LangSmithRunsPort & {
         inputs: details.inputs,
         outputs: details.outputs,
         extra: details.extra,
-        error: null,
+        error: observation.outcome === "error" ? observationError(observation) : null,
         children: [],
         startTime: observation.startedAtMs,
         endTime: observation.endedAtMs,
@@ -139,6 +139,7 @@ export function createLangSmithRunsPort(config: LangSmithTraceConfig): LangSmith
         inputs: details.inputs,
         outputs: details.outputs,
         extra: details.extra,
+        ...(observation.outcome === "error" ? { error: observationError(observation) } : {}),
         start_time: observation.startedAtMs,
         end_time: observation.endedAtMs,
       });
@@ -251,4 +252,19 @@ function providerOutputs(observation: Extract<TraceObservation, { kind: "model" 
       ...(usage.totalCost === undefined ? {} : { total_cost: usage.totalCost }),
     },
   };
+}
+
+function observationError(observation: TraceObservation): string {
+  switch (observation.kind) {
+    case "model":
+      return "model call failed";
+    case "embedding":
+      return "embedding call failed";
+    case "tool":
+      return "tool call failed";
+    default: {
+      const unexpected: never = observation;
+      return unexpected;
+    }
+  }
 }

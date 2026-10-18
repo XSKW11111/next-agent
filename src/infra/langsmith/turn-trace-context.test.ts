@@ -58,3 +58,22 @@ test("LangSmith child output uses standard usage fields and omits private tool p
     }],
   });
 });
+
+test("failed child runs carry a generic LangSmith error without exception text", async () => {
+  const port = memoryLangSmithRunsPort();
+  const root = await port.createRootRun({ name: "support-turn", project: "unit", sessionId: "session", turnId: "turn", tags: [] });
+  await port.writeObservation(root.runId, {
+    id: "failed-model", parentId: null, sequence: 0, startedAtMs: 10, endedAtMs: 20,
+    outcome: "error", kind: "model", operation: "chat", model: "safe-model",
+  });
+  await port.writeObservation(root.runId, {
+    id: "unavailable-tool", parentId: null, sequence: 1, startedAtMs: 11, endedAtMs: 21,
+    outcome: "unavailable", kind: "tool", name: "lookup_order", callId: "safe-id",
+  });
+  expect(await port.readRunTree(root.runId)).toMatchObject({
+    child_runs: [
+      { name: "chat-completion", outputs: { outcome: "error" }, error: "model call failed" },
+      { name: "lookup_order", outputs: { outcome: "unavailable" }, error: null },
+    ],
+  });
+});
