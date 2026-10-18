@@ -21,7 +21,7 @@ This inventory covers a new support turn sent through `submitTracedTurn`. It des
 
 ## Verification on 2026-10-18
 
-- The full in-memory suite passed 197 tests in 45 files. It covers nested tool and embedding spans, concurrent child writes, provider usage parsing, generic child errors, trace-safe child payloads, and partial root totals.
+- The full in-memory suite passed 199 tests in 45 files. It covers nested tool and embedding spans, concurrent child writes, partial provider usage parsing, generic child errors, trace-safe child payloads, and partial root totals.
 - A synthetic trace sent through `createTurnTracingSession` and `createLangSmithRunsPort` was read back from the `next-agent-debug` LangSmith project. Run `720f881c-9fce-4266-96fa-6ebcad472ba1` has two top-level children, one nested embedding child, 16 aggregate tokens, and $0.00000553 aggregate cost. Its root `observedUsage` includes two cached input tokens, one cache creation token, and one reasoning output token. This verifies the SDK write and readback path with known synthetic usage values.
 - A separate synthetic LangSmith child `ba8dc057-7e80-455c-9dfe-af9c1b19dfa4` read back with `error: "model call failed"` and `status: "error"`. This verifies the generic error field used for failed metric spans.
 - The synthetic readback did not exercise a browser send or a real OpenRouter response. Production verification of this PR remains pending. The prior deployed revision does not prove these new child fields.

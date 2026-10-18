@@ -20,9 +20,9 @@ const earlyRisersCampaign = "Early Risers";
 const issuedCode = /^EARLY-[A-Za-z0-9]{8}$/;
 const embeddingModel = "openai/text-embedding-3-small";
 const embeddingUsageSchema = z.object({
-  prompt_tokens: z.number().int().nonnegative().optional(),
-  total_tokens: z.number().int().nonnegative().optional(),
-  cost: z.number().finite().nonnegative().optional(),
+  prompt_tokens: z.number().int().nonnegative().optional().catch(undefined),
+  total_tokens: z.number().int().nonnegative().optional().catch(undefined),
+  cost: z.number().finite().nonnegative().optional().catch(undefined),
 });
 
 type OrderRow = {

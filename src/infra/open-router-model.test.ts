@@ -49,6 +49,25 @@ test("malformed provider usage remains unknown", async () => {
   expect(context.observations[0]).not.toHaveProperty("usage");
 });
 
+test("keeps valid chat token details when adjacent detail fields are invalid", async () => {
+  const context: TurnTraceContext = { rootRunId: "root", stepTimingsMs: new Map(), observations: [], nextObservationSequence: 0 };
+  const model = openRouterModel(config, async () => Response.json({
+    choices: [{ message: { content: "done" } }],
+    usage: {
+      prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, cost: null,
+      prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 1, audio_tokens: null },
+      completion_tokens_details: { reasoning_tokens: 1, image_tokens: "invalid" },
+    },
+  }));
+  await withTurnTraceContext(context, async () => { await model.complete({ systemPrompt: "system", messages: [] }); });
+  expect(context.observations[0]).toMatchObject({
+    kind: "model", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, cacheWriteTokens: 1, reasoningOutputTokens: 1 },
+  });
+  expect(context.observations[0]).not.toHaveProperty("usage.totalCost");
+  expect(context.observations[0]).not.toHaveProperty("usage.audioInputTokens");
+  expect(context.observations[0]).not.toHaveProperty("usage.imageOutputTokens");
+});
+
 test("the adapter sends the bearer token and model and maps a tool call", async () => {
   let seen: { url: string; init: RequestInit } | undefined;
   const fetchImpl: typeof fetch = async (url, init) => {

@@ -19,6 +19,19 @@ test("records reported embedding tokens and cost without query text", async () =
   expect(JSON.stringify(context.observations)).not.toContain("private product query");
 });
 
+test("keeps valid embedding token counts when cost is null", async () => {
+  const context: TurnTraceContext = { rootRunId: "root", stepTimingsMs: new Map(), observations: [], nextObservationSequence: 0 };
+  const embedder = openRouterEmbedder("test-key", async () => Response.json({
+    data: [{ embedding: [0.25, 0.5] }],
+    usage: { prompt_tokens: 6, total_tokens: 6, cost: null },
+  }));
+  await withTurnTraceContext(context, () => embedder.embed("private product query").then(() => undefined));
+  expect(context.observations).toMatchObject([
+    { kind: "embedding", usage: { inputTokens: 6, totalTokens: 6 } },
+  ]);
+  expect(context.observations[0]).not.toHaveProperty("usage.totalCost");
+});
+
 describe("supabaseOrderCatalog", () => {
   test("reads #W002 for the matching customer email", async () => {
     const catalog = supabaseOrderCatalog(orderClient());
