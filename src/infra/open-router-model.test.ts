@@ -19,16 +19,21 @@ const config: AgentConfig = {
 test("records provider chat and summary usage without exposing message text in spans", async () => {
   const context: TurnTraceContext = { rootRunId: "root", stepTimingsMs: new Map(), observations: [], nextObservationSequence: 0 };
   const model = openRouterModel(config, async () => Response.json({
+    model: "routed-provider-model",
     choices: [{ message: { content: "private reply" } }],
-    usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, cost: 0.00000541 },
+    usage: {
+      prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, cost: 0.00000541,
+      prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 1, audio_tokens: 0, image_tokens: 0, video_tokens: 0 },
+      completion_tokens_details: { reasoning_tokens: 1, audio_tokens: 0, image_tokens: 0 },
+    },
   }));
   await withTurnTraceContext(context, async () => {
     await model.complete({ systemPrompt: "private prompt", messages: [{ role: "user", content: "private question" }] });
     await model.summarize?.("private history");
   });
   expect(context.observations).toMatchObject([
-    { kind: "model", operation: "chat", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, totalCost: 0.00000541 } },
-    { kind: "model", operation: "summary", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, totalCost: 0.00000541 } },
+    { kind: "model", operation: "chat", model: "routed-provider-model", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, cacheWriteTokens: 1, audioInputTokens: 0, imageInputTokens: 0, videoInputTokens: 0, reasoningOutputTokens: 1, audioOutputTokens: 0, imageOutputTokens: 0, totalCost: 0.00000541 } },
+    { kind: "model", operation: "summary", model: "routed-provider-model", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, cacheWriteTokens: 1, audioInputTokens: 0, imageInputTokens: 0, videoInputTokens: 0, reasoningOutputTokens: 1, audioOutputTokens: 0, imageOutputTokens: 0, totalCost: 0.00000541 } },
   ]);
   expect(JSON.stringify(context.observations)).not.toContain("private");
 });

@@ -43,7 +43,6 @@ type StoredRun = {
   readonly endTime?: number;
 };
 
-/** In-memory store for unit tests and offline projection. */
 export function memoryLangSmithRunsPort(): LangSmithRunsPort & {
   readonly runs: ReadonlyMap<string, StoredRun>;
 } {
@@ -135,6 +134,7 @@ export function createLangSmithRunsPort(config: LangSmithTraceConfig): LangSmith
         id: runId,
         name: details.name,
         run_type: details.runType,
+        project_name: config.project,
         parent_run_id: parentRunId,
         inputs: details.inputs,
         outputs: details.outputs,
@@ -228,12 +228,26 @@ function observationDetails(observation: TraceObservation): {
 function providerOutputs(observation: Extract<TraceObservation, { kind: "model" | "embedding" }>): Record<string, unknown> {
   const usage = observation.usage;
   if (usage === undefined) return { outcome: observation.outcome };
+  const inputTokenDetails = {
+    ...(usage.cachedInputTokens === undefined ? {} : { cache_read: usage.cachedInputTokens }),
+    ...(usage.cacheWriteTokens === undefined ? {} : { cache_creation: usage.cacheWriteTokens }),
+    ...(usage.audioInputTokens === undefined ? {} : { audio: usage.audioInputTokens }),
+    ...(usage.imageInputTokens === undefined ? {} : { image: usage.imageInputTokens }),
+    ...(usage.videoInputTokens === undefined ? {} : { video: usage.videoInputTokens }),
+  };
+  const outputTokenDetails = {
+    ...(usage.reasoningOutputTokens === undefined ? {} : { reasoning: usage.reasoningOutputTokens }),
+    ...(usage.audioOutputTokens === undefined ? {} : { audio: usage.audioOutputTokens }),
+    ...(usage.imageOutputTokens === undefined ? {} : { image: usage.imageOutputTokens }),
+  };
   return {
     outcome: observation.outcome,
     usage_metadata: {
       ...(usage.inputTokens === undefined ? {} : { input_tokens: usage.inputTokens }),
       ...(usage.outputTokens === undefined ? {} : { output_tokens: usage.outputTokens }),
       ...(usage.totalTokens === undefined ? {} : { total_tokens: usage.totalTokens }),
+      ...(Object.keys(inputTokenDetails).length === 0 ? {} : { input_token_details: inputTokenDetails }),
+      ...(Object.keys(outputTokenDetails).length === 0 ? {} : { output_token_details: outputTokenDetails }),
       ...(usage.totalCost === undefined ? {} : { total_cost: usage.totalCost }),
     },
   };

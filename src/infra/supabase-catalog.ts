@@ -106,7 +106,10 @@ export function openRouterEmbedder(apiKey: string, fetchImpl: typeof fetch = fet
         throw new Error("embedding response is invalid");
       }
       const usage = embeddingUsage(payload);
-      return { value: embedding, ...(usage === undefined ? {} : { usage }) };
+      const model = typeof payload === "object" && payload !== null && "model" in payload && typeof payload.model === "string" && payload.model.trim().length > 0
+        ? payload.model
+        : undefined;
+      return { value: embedding, ...(usage === undefined ? {} : { usage }), ...(model === undefined ? {} : { model }) };
       });
     },
   };

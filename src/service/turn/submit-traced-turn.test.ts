@@ -9,11 +9,84 @@ import type { ScriptedModel, SupportTurnDependencies } from "../agent/support-tu
 import { projectSupportTurnTraceView } from "../trace/project-support-turn-trace-view";
 import type { MessageStore, SequenceUpdate, TurnMessage } from "./message-store";
 import { memoryLangSmithRunsPort } from "../../infra/langsmith/langsmith-runs-port";
+import type { TraceObservation } from "../../infra/langsmith/turn-trace-context";
+import { observeProvider } from "../../infra/langsmith/turn-trace-context";
 import { createTurnTracingSession, submitTracedTurn } from "./submit-traced-turn";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const turnId = "22222222-2222-4222-8222-222222222222";
 const otherTurnId = "33333333-3333-4333-8333-333333333333";
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+test("independent child runs flush concurrently while nested runs wait for their tool", async () => {
+  const base = memoryLangSmithRunsPort();
+  const root = await base.createRootRun({ name: "support-turn", project: "unit", sessionId, turnId, tags: [] });
+  let releaseFirst: (() => void) | undefined;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let sawFirst: (() => void) | undefined;
+  let sawSecond: (() => void) | undefined;
+  const firstStarted = new Promise<void>((resolve) => { sawFirst = resolve; });
+  const secondStarted = new Promise<void>((resolve) => { sawSecond = resolve; });
+  const calls: string[] = [];
+  const tracing = createTurnTracingSession({
+    config: { apiKey: "test", project: "unit" },
+    client: { ...base, async writeObservation(parentRunId, observation) {
+      calls.push(observation.id);
+      if (observation.id === "tool-a") { sawFirst?.(); await firstGate; }
+      if (observation.id === "tool-b") sawSecond?.();
+      return base.writeObservation(parentRunId, observation);
+    } },
+  });
+  const common = { startedAtMs: 10, endedAtMs: 20, outcome: "success" as const };
+  const observations: TraceObservation[] = [
+    { ...common, id: "tool-a", parentId: null, sequence: 0, kind: "tool", name: "search_products", callId: "a" },
+    { ...common, id: "tool-b", parentId: null, sequence: 1, kind: "tool", name: "search_products", callId: "b" },
+    { ...common, id: "embed-a", parentId: "tool-a", sequence: 2, kind: "embedding", model: "embedding", usage: { totalTokens: 3 } },
+  ];
+  const flushing = tracing.flushObservations(root.runId, observations);
+  await Promise.all([firstStarted, secondStarted]);
+  expect(calls).toEqual(["tool-a", "tool-b"]);
+  releaseFirst?.();
+  expect(await flushing).toBe(0);
+  expect(calls).toEqual(["tool-a", "tool-b", "embed-a"]);
+  const toolA = [...base.runs.values()].find((run) => run.inputs && typeof run.inputs === "object" && "callId" in run.inputs && run.inputs.callId === "a");
+  const embedding = [...base.runs.values()].find((run) => run.name === "embed-query");
+  expect(embedding?.parentRunId).toBe(toolA?.id);
+});
+
+test("child writes stay within the concurrency bound", async () => {
+  const base = memoryLangSmithRunsPort();
+  const root = await base.createRootRun({ name: "support-turn", project: "unit", sessionId, turnId, tags: [] });
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let reachedEight: (() => void) | undefined;
+  const eightStarted = new Promise<void>((resolve) => { reachedEight = resolve; });
+  let active = 0;
+  let peak = 0;
+  const tracing = createTurnTracingSession({
+    config: { apiKey: "test", project: "unit" },
+    client: { ...base, async writeObservation(parentRunId, observation) {
+      active += 1;
+      peak = Math.max(peak, active);
+      if (active === 8) reachedEight?.();
+      await gate;
+      const child = await base.writeObservation(parentRunId, observation);
+      active -= 1;
+      return child;
+    } },
+  });
+  const observations: TraceObservation[] = Array.from({ length: 12 }, (_item, index) => ({
+    id: `tool-${index}`, parentId: null, sequence: index, startedAtMs: 10, endedAtMs: 20,
+    kind: "tool", name: "search_products", callId: `call-${index}`, outcome: "success",
+  }));
+  const flushing = tracing.flushObservations(root.runId, observations);
+  await eightStarted;
+  expect(peak).toBe(8);
+  release?.();
+  expect(await flushing).toBe(0);
+  expect(peak).toBe(8);
+  expect(base.runs.get(root.runId)?.children).toHaveLength(12);
+});
 
 test("a new traced turn records domain input and output on the root run", async () => {
   const messages = memoryMessages();
@@ -55,6 +128,12 @@ test("a new traced turn records domain input and output on the root run", async 
   expect(view.output.waitingCalls).toEqual([]);
   expect(view.output.chunkPlans).toEqual([]);
   expect(view.modelFailure).toBeNull();
+  expect(client.runs.get(result.langsmithRunId)?.extra).toMatchObject({
+    providerCalls: 0,
+    tokenUsageComplete: false,
+    costUsageComplete: false,
+    observationFailures: 0,
+  });
   expect(view.stepTimingsMs).toMatchObject({
     "insert-customer": expect.any(Number),
     "prior-context": expect.any(Number),
@@ -142,8 +221,37 @@ test("a traced tool round stores the chunk plan and tool result", async () => {
   expect(view.output.toolResults[0]?.tool).toBe("search_products");
   const root = client.runs.get(result.langsmithRunId);
   const tool = client.runs.get(root?.children[0] ?? "");
-  expect(tool).toMatchObject({ name: "search_products", runType: "tool", inputs: { callId: "search-1" }, outputs: { outcome: "success" } });
+  expect(tool).toMatchObject({ name: "search_products", runType: "tool", inputs: { callId: expect.stringMatching(uuidPattern) }, outputs: { outcome: "success" } });
   expect(tool?.children).toEqual([]);
+});
+
+test("root reports only provider supplied usage and executed tool counts", async () => {
+  const client = memoryLangSmithRunsPort();
+  const tracing = createTurnTracingSession({ config: { apiKey: "test", project: "unit" }, client });
+  let calls = 0;
+  const result = await submitTracedTurn({
+    sessionId, turnId, text: "show products", messages: memoryMessages(), tracing,
+    model: { complete() {
+      calls += 1;
+      return observeProvider({ kind: "model", operation: "chat", model: "provider-model" }, async () => ({
+        value: calls === 1
+          ? { text: "Looking.", toolCalls: [{ id: "search-1", name: "search_products", args: { mode: "list" } }] }
+          : { text: "Here are products." },
+        ...(calls === 1 ? { usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, reasoningOutputTokens: 1, totalCost: 0.00000541 } } : {}),
+      }));
+    } },
+    dependencies: dependencies(),
+  });
+  if (result.kind !== "reply" || result.langsmithRunId === null) throw new Error("expected traced reply");
+  const root = client.runs.get(result.langsmithRunId);
+  expect(root?.extra).toMatchObject({
+    providerCalls: 2, modelCalls: 2, embeddingCalls: 0, toolCalls: 1, skippedToolCalls: 0,
+    toolOutcomes: { success: 1, unavailable: 0, error: 0 },
+    providerOutcomes: { success: 2, error: 0 },
+    observedUsage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, reasoningOutputTokens: 1, totalCost: 0.00000541 },
+    tokenUsageComplete: false, costUsageComplete: false, observationFailures: 0,
+  });
+  expect(root?.children).toHaveLength(3);
 });
 
 test("a child trace write failure preserves the saved reply and executes a tool once", async () => {
@@ -197,7 +305,7 @@ test("a failed model after a tool still flushes completed tool spans", async () 
   const root = [...client.runs.values()].find((run) => run.parentRunId === null);
   const child = [...client.runs.values()].find((run) => run.parentRunId === root?.id);
   expect(root?.error).toBe("model unavailable");
-  expect(child).toMatchObject({ name: "search_products", inputs: { callId: "search-1" }, outputs: { outcome: "success" } });
+  expect(child).toMatchObject({ name: "search_products", inputs: { callId: expect.stringMatching(uuidPattern) }, outputs: { outcome: "success" } });
   expect(root?.extra).toMatchObject({ observationFailures: 0 });
 });
 
@@ -210,7 +318,7 @@ test("tool child spans omit customer arguments and returned data", async () => {
     model: { async complete() {
       modelCalls += 1;
       return modelCalls === 1
-        ? { text: "Checking.", toolCalls: [{ id: "lookup-1", name: "lookup_order", args: { email: "secret-marker@example.com", order_number: "#W123" } }] }
+        ? { text: "Checking.", toolCalls: [{ id: "secret-marker@example.com", name: "lookup_order", args: { email: "secret-marker@example.com", order_number: "#W123" } }] }
         : { text: "Done." };
     } },
     dependencies: dependencies(),
@@ -218,7 +326,7 @@ test("tool child spans omit customer arguments and returned data", async () => {
   if (result.kind !== "reply" || result.langsmithRunId === null) throw new Error("expected traced reply");
   const root = client.runs.get(result.langsmithRunId);
   const child = client.runs.get(root?.children[0] ?? "");
-  expect(child).toMatchObject({ name: "lookup_order", inputs: { callId: "lookup-1" }, outputs: { outcome: "success" } });
+  expect(child).toMatchObject({ name: "lookup_order", inputs: { callId: expect.stringMatching(uuidPattern) }, outputs: { outcome: "success" } });
   expect(JSON.stringify({ inputs: child?.inputs, outputs: child?.outputs, extra: child?.extra })).not.toMatch(/secret-marker|#W123|private customer question/);
   expect(result.reply).toBe("Done.");
 });

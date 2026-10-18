@@ -5,6 +5,14 @@ export type ReportedUsage = {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly audioInputTokens?: number;
+  readonly imageInputTokens?: number;
+  readonly videoInputTokens?: number;
+  readonly reasoningOutputTokens?: number;
+  readonly audioOutputTokens?: number;
+  readonly imageOutputTokens?: number;
   readonly totalCost?: number;
 };
 
@@ -60,16 +68,16 @@ export function currentTurnTraceContext(): TurnTraceContext | null {
   return storage.getStore()?.turn ?? null;
 }
 
-export async function observeTool<T>(name: string, callId: string, fn: () => Promise<T>): Promise<T> {
+export async function observeTool<T>(name: string, fn: () => Promise<T>): Promise<T> {
   const scope = storage.getStore();
   if (scope === undefined) return fn();
   const start = startObservation(scope);
   try {
     const value = await storage.run({ turn: scope.turn, parentId: start.id }, fn);
-    scope.turn.observations.push({ ...start, kind: "tool", name, callId, endedAtMs: Date.now(), outcome: isUnavailable(value) ? "unavailable" : "success" });
+    scope.turn.observations.push({ ...start, kind: "tool", name, callId: start.id, endedAtMs: Date.now(), outcome: isUnavailable(value) ? "unavailable" : "success" });
     return value;
   } catch (error) {
-    scope.turn.observations.push({ ...start, kind: "tool", name, callId, endedAtMs: Date.now(), outcome: "error" });
+    scope.turn.observations.push({ ...start, kind: "tool", name, callId: start.id, endedAtMs: Date.now(), outcome: "error" });
     throw error;
   }
 }
@@ -77,14 +85,14 @@ export async function observeTool<T>(name: string, callId: string, fn: () => Pro
 export async function observeProvider<T>(
   source: { readonly kind: "model"; readonly operation: "chat" | "summary"; readonly model: string }
     | { readonly kind: "embedding"; readonly model: string },
-  fn: () => Promise<{ readonly value: T; readonly usage?: ReportedUsage }>,
+  fn: () => Promise<{ readonly value: T; readonly usage?: ReportedUsage; readonly model?: string }>,
 ): Promise<T> {
   const scope = storage.getStore();
   if (scope === undefined) return (await fn()).value;
   const start = startObservation(scope);
   try {
     const result = await fn();
-    scope.turn.observations.push({ ...start, ...source, endedAtMs: Date.now(), outcome: "success", ...(result.usage === undefined ? {} : { usage: result.usage }) });
+    scope.turn.observations.push({ ...start, ...source, model: result.model ?? source.model, endedAtMs: Date.now(), outcome: "success", ...(result.usage === undefined ? {} : { usage: result.usage }) });
     return result.value;
   } catch (error) {
     scope.turn.observations.push({ ...start, ...source, endedAtMs: Date.now(), outcome: "error" });

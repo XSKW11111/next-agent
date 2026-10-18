@@ -5,7 +5,6 @@ import { contextWindowTokens } from "@/service/agent/context-summary";
 import type { ScriptedModel, ScriptedReply, SupportMessage } from "@/service/agent/support-turn";
 import { observeProvider, type ReportedUsage } from "./langsmith/turn-trace-context";
 
-// cl100k_base is our count. DeepSeek's tokenizer can disagree, and the hard budget stays below the window so that gap is slack.
 const contextEncoder = getEncoding("cl100k_base");
 
 const toolNames = ["lookup_order", "search_products", "claim_early_risers", "capture_handoff"] as const;
@@ -13,6 +12,7 @@ const toolNames = ["lookup_order", "search_products", "claim_early_risers", "cap
 const toolNameSchema = z.enum(toolNames);
 
 const completionSchema = z.object({
+  model: z.unknown().optional(),
   choices: z
     .array(
       z.object({
@@ -36,11 +36,26 @@ const completionSchema = z.object({
   usage: z.unknown().optional(),
 });
 
+const tokenUsage = z.number().int().nonnegative().optional().catch(undefined);
+const costUsage = z.number().finite().nonnegative().optional().catch(undefined);
+
 const usageSchema = z.object({
-  prompt_tokens: z.number().int().nonnegative().optional(),
-  completion_tokens: z.number().int().nonnegative().optional(),
-  total_tokens: z.number().int().nonnegative().optional(),
-  cost: z.number().finite().nonnegative().optional(),
+  prompt_tokens: tokenUsage,
+  completion_tokens: tokenUsage,
+  total_tokens: tokenUsage,
+  prompt_tokens_details: z.object({
+    cached_tokens: tokenUsage,
+    cache_write_tokens: tokenUsage,
+    audio_tokens: tokenUsage,
+    image_tokens: tokenUsage,
+    video_tokens: tokenUsage,
+  }).optional().catch(undefined),
+  completion_tokens_details: z.object({
+    reasoning_tokens: tokenUsage,
+    audio_tokens: tokenUsage,
+    image_tokens: tokenUsage,
+  }).optional().catch(undefined),
+  cost: costUsage,
 });
 
 const tools = [
@@ -147,7 +162,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       });
         if (!response.ok) throw await failedResponse(response, config.debugToolDetails);
         const completion = await readReply(response, config.debugToolDetails);
-        return { value: completion.reply.text, ...(completion.usage === undefined ? {} : { usage: completion.usage }) };
+        return { value: completion.reply.text, ...(completion.usage === undefined ? {} : { usage: completion.usage }), ...(completion.model === undefined ? {} : { model: completion.model }) };
       });
     },
     async complete(input) {
@@ -172,7 +187,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       });
         if (!response.ok) throw await failedResponse(response, config.debugToolDetails);
         const completion = await readReply(response, config.debugToolDetails);
-        return { value: completion.reply, ...(completion.usage === undefined ? {} : { usage: completion.usage }) };
+        return { value: completion.reply, ...(completion.usage === undefined ? {} : { usage: completion.usage }), ...(completion.model === undefined ? {} : { model: completion.model }) };
       });
     },
   };
@@ -281,7 +296,7 @@ async function failedResponse(response: Response, debugToolDetails: boolean): Pr
   return new Error(`OpenRouter chat completion failed with status ${status}: ${body}`);
 }
 
-async function readReply(response: Response, debugToolDetails: boolean): Promise<{ readonly reply: ScriptedReply; readonly usage?: ReportedUsage }> {
+async function readReply(response: Response, debugToolDetails: boolean): Promise<{ readonly reply: ScriptedReply; readonly usage?: ReportedUsage; readonly model?: string }> {
   const payload: unknown = await response.json().catch(() => undefined);
   const parsed = completionSchema.safeParse(payload);
   if (!parsed.success) {
@@ -305,6 +320,7 @@ async function readReply(response: Response, debugToolDetails: boolean): Promise
   return {
     reply: { text: message.content ?? "", ...(toolCalls.length === 0 ? {} : { toolCalls }) },
     ...(usage === undefined ? {} : { usage }),
+    ...(typeof parsed.data.model === "string" && parsed.data.model.trim().length > 0 ? { model: parsed.data.model } : {}),
   };
 }
 
@@ -313,6 +329,14 @@ function reportedUsage(raw: z.infer<typeof usageSchema>): ReportedUsage | undefi
     ...(raw.prompt_tokens === undefined ? {} : { inputTokens: raw.prompt_tokens }),
     ...(raw.completion_tokens === undefined ? {} : { outputTokens: raw.completion_tokens }),
     ...(raw.total_tokens === undefined ? {} : { totalTokens: raw.total_tokens }),
+    ...(raw.prompt_tokens_details?.cached_tokens === undefined ? {} : { cachedInputTokens: raw.prompt_tokens_details.cached_tokens }),
+    ...(raw.prompt_tokens_details?.cache_write_tokens === undefined ? {} : { cacheWriteTokens: raw.prompt_tokens_details.cache_write_tokens }),
+    ...(raw.prompt_tokens_details?.audio_tokens === undefined ? {} : { audioInputTokens: raw.prompt_tokens_details.audio_tokens }),
+    ...(raw.prompt_tokens_details?.image_tokens === undefined ? {} : { imageInputTokens: raw.prompt_tokens_details.image_tokens }),
+    ...(raw.prompt_tokens_details?.video_tokens === undefined ? {} : { videoInputTokens: raw.prompt_tokens_details.video_tokens }),
+    ...(raw.completion_tokens_details?.reasoning_tokens === undefined ? {} : { reasoningOutputTokens: raw.completion_tokens_details.reasoning_tokens }),
+    ...(raw.completion_tokens_details?.audio_tokens === undefined ? {} : { audioOutputTokens: raw.completion_tokens_details.audio_tokens }),
+    ...(raw.completion_tokens_details?.image_tokens === undefined ? {} : { imageOutputTokens: raw.completion_tokens_details.image_tokens }),
     ...(raw.cost === undefined ? {} : { totalCost: raw.cost }),
   };
   return Object.keys(usage).length === 0 ? undefined : usage;

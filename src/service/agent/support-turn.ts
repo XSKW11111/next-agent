@@ -425,7 +425,7 @@ function routeAfterTools(state: TurnChannels, ready: ReadyTurn): "tools" | "agen
 }
 
 function runCall(call: ModelToolCall, ready: ReadyTurn): Promise<unknown> {
-  return observeTool(call.name, call.id, () => runSupportTool({
+  return observeTool(call.name, () => runSupportTool({
     name: call.name,
     args: call.args,
     sessionId: ready.sessionId,

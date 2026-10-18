@@ -8,12 +8,13 @@ import { withTurnTraceContext, type TurnTraceContext } from "./langsmith/turn-tr
 test("records reported embedding tokens and cost without query text", async () => {
   const context: TurnTraceContext = { rootRunId: "root", stepTimingsMs: new Map(), observations: [], nextObservationSequence: 0 };
   const embedder = openRouterEmbedder("test-key", async () => Response.json({
+    model: "text-embedding-3-small",
     data: [{ embedding: [0.25, 0.5] }],
     usage: { prompt_tokens: 6, total_tokens: 6, cost: 0.00000012 },
   }));
   await withTurnTraceContext(context, () => embedder.embed("private product query").then(() => undefined));
   expect(context.observations).toMatchObject([
-    { kind: "embedding", usage: { inputTokens: 6, totalTokens: 6, totalCost: 0.00000012 } },
+    { kind: "embedding", model: "text-embedding-3-small", usage: { inputTokens: 6, totalTokens: 6, totalCost: 0.00000012 } },
   ]);
   expect(JSON.stringify(context.observations)).not.toContain("private product query");
 });
