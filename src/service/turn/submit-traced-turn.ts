@@ -2,7 +2,7 @@ import type { SupportTurnTraceInput, SupportTurnTraceOutput } from "../../domain
 import { parseTurn, type Turn } from "../../domain/turn";
 import type { LangSmithTraceConfig } from "../../infra/langsmith/trace-config";
 import type { LangSmithRunsPort } from "../../infra/langsmith/langsmith-runs-port";
-import { withTurnTraceContext } from "../../infra/langsmith/turn-trace-context";
+import { withTurnTraceContext, type TraceObservation } from "../../infra/langsmith/turn-trace-context";
 import {
   runSupportTurn,
   type ScriptedModel,
@@ -23,6 +23,7 @@ export type TurnTracingSession = {
     readonly sessionId: string;
     readonly turnId: string;
   }) => Promise<{ readonly rootRunId: string }>;
+  readonly flushObservations: (rootRunId: string, observations: readonly TraceObservation[]) => Promise<number>;
   readonly finalizeRootRun: (input: {
     readonly rootRunId: string;
     readonly sessionId: string;
@@ -30,6 +31,17 @@ export type TurnTracingSession = {
     readonly traceInput: SupportTurnTraceInput;
     readonly traceOutput: SupportTurnTraceOutput;
     readonly stepTimingsMs: Readonly<Record<string, number>>;
+    readonly observationFailures: number;
+    readonly providerCalls: number;
+    readonly modelCalls: number;
+    readonly embeddingCalls: number;
+    readonly toolCalls: number;
+    readonly skippedToolCalls?: number;
+    readonly toolOutcomes: Readonly<Record<"success" | "unavailable" | "error", number>>;
+    readonly providerOutcomes: Readonly<Record<"success" | "error", number>>;
+    readonly observedUsage: Readonly<Record<string, number>>;
+    readonly tokenUsageComplete: boolean;
+    readonly costUsageComplete: boolean;
     readonly error?: string;
   }) => Promise<void>;
 };
@@ -68,11 +80,67 @@ export function createTurnTracingSession(input: {
       });
       return { rootRunId: runId };
     },
+    async flushObservations(rootRunId, observations) {
+      const runIds = new Map<string, Promise<string | undefined>>();
+      let failures = 0;
+      let activeWrites = 0;
+      const waiting: Array<() => void> = [];
+      async function write(parentRunId: string, observation: TraceObservation): Promise<string> {
+        if (activeWrites >= 8) {
+          await new Promise<void>((resolve) => waiting.push(resolve));
+        } else {
+          activeWrites += 1;
+        }
+        try {
+          return (await input.client.writeObservation(parentRunId, observation)).runId;
+        } finally {
+          const next = waiting.shift();
+          if (next === undefined) activeWrites -= 1;
+          else next();
+        }
+      }
+      for (const observation of [...observations].sort((a, b) => a.sequence - b.sequence)) {
+        const parent = observation.parentId === null
+          ? Promise.resolve(rootRunId)
+          : runIds.get(observation.parentId);
+        const run = (async () => {
+          const parentRunId = await parent;
+          if (parentRunId === undefined) {
+            failures += 1;
+            return undefined;
+          }
+          try {
+            return await write(parentRunId, observation);
+          } catch {
+            failures += 1;
+            return undefined;
+          }
+        })();
+        runIds.set(observation.id, run);
+      }
+      await Promise.all(runIds.values());
+      return failures;
+    },
     async finalizeRootRun(finalize) {
       await input.client.patchRun(finalize.rootRunId, {
         inputs: finalize.traceInput,
         outputs: finalize.traceOutput,
-        extra: { sessionId: finalize.sessionId, turnId: finalize.turnId, stepTimingsMs: finalize.stepTimingsMs },
+        extra: {
+          sessionId: finalize.sessionId,
+          turnId: finalize.turnId,
+          stepTimingsMs: finalize.stepTimingsMs,
+          observationFailures: finalize.observationFailures,
+          providerCalls: finalize.providerCalls,
+          modelCalls: finalize.modelCalls,
+          embeddingCalls: finalize.embeddingCalls,
+          toolCalls: finalize.toolCalls,
+          ...(finalize.skippedToolCalls === undefined ? {} : { skippedToolCalls: finalize.skippedToolCalls }),
+          toolOutcomes: finalize.toolOutcomes,
+          providerOutcomes: finalize.providerOutcomes,
+          observedUsage: finalize.observedUsage,
+          tokenUsageComplete: finalize.tokenUsageComplete,
+          costUsageComplete: finalize.costUsageComplete,
+        },
         ...(finalize.error === undefined ? {} : { error: finalize.error }),
         end: true,
       });
@@ -80,7 +148,6 @@ export function createTurnTracingSession(input: {
   };
 }
 
-/** Same idempotency as submitTurn; opens one root run only on the new-turn path. */
 export async function submitTracedTurn(
   input: SubmitTracedTurnInput,
 ): Promise<SubmitTracedTurnResult> {
@@ -119,11 +186,14 @@ async function saveTracedTurn(
   });
 
   const stepTimingsMs = new Map<string, number>();
+  const observations: TraceObservation[] = [];
+  let observationsFlushed = false;
+  let observationFailures = 0;
   const promptCapture = { value: supportSystemPrompt };
   let historyMessages: Awaited<ReturnType<typeof priorContext>>["messages"] = [];
 
   try {
-    return await withTurnTraceContext({ rootRunId, stepTimingsMs }, async () => {
+    return await withTurnTraceContext({ rootRunId, stepTimingsMs, observations, nextObservationSequence: 0 }, async () => {
       const insertCustomerStarted = performance.now();
       await insertRow(input.messages, {
         sessionId: turn.sessionId,
@@ -192,6 +262,8 @@ async function saveTracedTurn(
       });
       const traceOutput = buildTraceOutput(completion);
       const finalizedStepTimingsMs = Object.fromEntries(stepTimingsMs);
+      observationsFlushed = true;
+      observationFailures = await input.tracing.flushObservations(rootRunId, observations);
       await input.tracing.finalizeRootRun({
         rootRunId,
         sessionId: turn.sessionId,
@@ -199,6 +271,8 @@ async function saveTracedTurn(
         traceInput,
         traceOutput,
         stepTimingsMs: finalizedStepTimingsMs,
+        observationFailures,
+        ...traceMetrics(observations, observationFailures, traceOutput.waitingCalls.length),
       });
 
       return {
@@ -218,6 +292,9 @@ async function saveTracedTurn(
       waitingCalls: [],
       chunkPlans: [],
     };
+    if (!observationsFlushed) {
+      observationFailures = await input.tracing.flushObservations(rootRunId, observations);
+    }
     await input.tracing.finalizeRootRun({
       rootRunId,
       sessionId: turn.sessionId,
@@ -231,10 +308,55 @@ async function saveTracedTurn(
       }),
       traceOutput: emptyOutput,
       stepTimingsMs: Object.fromEntries(stepTimingsMs),
+      observationFailures,
+      ...traceMetrics(observations, observationFailures),
       error: message,
     });
     throw error;
   }
+}
+
+function traceMetrics(observations: readonly TraceObservation[], observationFailures: number, skippedToolCalls?: number): {
+  readonly providerCalls: number;
+  readonly modelCalls: number;
+  readonly embeddingCalls: number;
+  readonly toolCalls: number;
+  readonly skippedToolCalls?: number;
+  readonly toolOutcomes: Readonly<Record<"success" | "unavailable" | "error", number>>;
+  readonly providerOutcomes: Readonly<Record<"success" | "error", number>>;
+  readonly observedUsage: Readonly<Record<string, number>>;
+  readonly tokenUsageComplete: boolean;
+  readonly costUsageComplete: boolean;
+} {
+  const providers = observations.filter((observation) => observation.kind === "model" || observation.kind === "embedding");
+  const tools = observations.filter((observation) => observation.kind === "tool");
+  const observedUsage: Record<string, number> = {};
+  const usageKeys = ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "cacheWriteTokens", "audioInputTokens", "imageInputTokens", "videoInputTokens", "reasoningOutputTokens", "audioOutputTokens", "imageOutputTokens", "totalCost"] as const;
+  for (const provider of providers) {
+    for (const key of usageKeys) {
+      const value = provider.usage?.[key];
+      if (value !== undefined) observedUsage[key] = (observedUsage[key] ?? 0) + value;
+    }
+  }
+  return {
+    providerCalls: providers.length,
+    modelCalls: providers.filter((observation) => observation.kind === "model").length,
+    embeddingCalls: providers.filter((observation) => observation.kind === "embedding").length,
+    toolCalls: tools.length,
+    ...(skippedToolCalls === undefined ? {} : { skippedToolCalls }),
+    toolOutcomes: {
+      success: tools.filter((observation) => observation.outcome === "success").length,
+      unavailable: tools.filter((observation) => observation.outcome === "unavailable").length,
+      error: tools.filter((observation) => observation.outcome === "error").length,
+    },
+    providerOutcomes: {
+      success: providers.filter((observation) => observation.outcome === "success").length,
+      error: providers.filter((observation) => observation.outcome === "error").length,
+    },
+    observedUsage,
+    tokenUsageComplete: providers.length > 0 && observationFailures === 0 && providers.every((observation) => observation.usage?.totalTokens !== undefined),
+    costUsageComplete: providers.length > 0 && observationFailures === 0 && providers.every((observation) => observation.usage?.totalCost !== undefined),
+  };
 }
 
 function captureSystemPrompt(

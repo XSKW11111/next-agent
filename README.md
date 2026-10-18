@@ -35,3 +35,9 @@ Run `npm run build`.
 Run `npm start`. Open `/`. The page shows the text next-agent.
 
 `GET /api/health` returns status 200 and `{ "ok": true }`.
+
+## Verify LangSmith observations
+
+A new support turn writes a `support-turn` root run to `LANGSMITH_PROJECT`. The root keeps the customer-facing input and reply. Executed tools have child spans with only the tool name, generated trace call ID, outcome, and timing. The generated ID avoids copying a model-provided ID that could contain customer text. OpenRouter chat and summary calls have `llm` spans. An embedding call has an `llm` span named `embed-query` under its tool so LangSmith includes its reported tokens in project totals.
+
+For a synthetic tool-using turn, read the root and child runs after a bounded ingestion wait. Match the root session and turn IDs, inspect child parent IDs and start/end times, and compare `outputs.usage_metadata` with LangSmith token and cost columns. Provider usage is optional. Missing values remain unknown even if LangSmith displays zero. Check `extra.metadata.usageReported` and `costReported` on provider spans, and `extra.tokenUsageComplete`, `costUsageComplete`, `observedUsage`, and `observationFailures` on the root before treating an aggregate as complete. The root also records model, embedding, executed tool, and skipped tool counts. Verify that new child inputs, outputs, and metadata contain no prompt, tool argument, or result text. The root still contains customer context and tool results. A child upload failure must not change the saved customer reply. See [result.md](result.md) for the metric inventory and verification evidence.

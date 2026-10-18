@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { AgentConfig } from "./agent-config";
 import { openRouterModel } from "./open-router-model";
+import { withTurnTraceContext, type TurnTraceContext } from "./langsmith/turn-trace-context";
 
 const config: AgentConfig = {
   openRouterApiKey: "test-openrouter-token",
@@ -14,6 +15,58 @@ const config: AgentConfig = {
   contextHardTokens: 120000,
   debugToolDetails: false,
 };
+
+test("records provider chat and summary usage without exposing message text in spans", async () => {
+  const context: TurnTraceContext = { rootRunId: "root", stepTimingsMs: new Map(), observations: [], nextObservationSequence: 0 };
+  const model = openRouterModel(config, async () => Response.json({
+    model: "routed-provider-model",
+    choices: [{ message: { content: "private reply" } }],
+    usage: {
+      prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, cost: 0.00000541,
+      prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 1, audio_tokens: 0, image_tokens: 0, video_tokens: 0 },
+      completion_tokens_details: { reasoning_tokens: 1, audio_tokens: 0, image_tokens: 0 },
+    },
+  }));
+  await withTurnTraceContext(context, async () => {
+    await model.complete({ systemPrompt: "private prompt", messages: [{ role: "user", content: "private question" }] });
+    await model.summarize?.("private history");
+  });
+  expect(context.observations).toMatchObject([
+    { kind: "model", operation: "chat", model: "routed-provider-model", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, cacheWriteTokens: 1, audioInputTokens: 0, imageInputTokens: 0, videoInputTokens: 0, reasoningOutputTokens: 1, audioOutputTokens: 0, imageOutputTokens: 0, totalCost: 0.00000541 } },
+    { kind: "model", operation: "summary", model: "routed-provider-model", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, cacheWriteTokens: 1, audioInputTokens: 0, imageInputTokens: 0, videoInputTokens: 0, reasoningOutputTokens: 1, audioOutputTokens: 0, imageOutputTokens: 0, totalCost: 0.00000541 } },
+  ]);
+  expect(JSON.stringify(context.observations)).not.toContain("private");
+});
+
+test("malformed provider usage remains unknown", async () => {
+  const context: TurnTraceContext = { rootRunId: "root", stepTimingsMs: new Map(), observations: [], nextObservationSequence: 0 };
+  const model = openRouterModel(config, async () => Response.json({
+    choices: [{ message: { content: "done" } }],
+    usage: { prompt_tokens: "seven", total_tokens: -1, cost: "unknown" },
+  }));
+  await withTurnTraceContext(context, async () => { await model.complete({ systemPrompt: "system", messages: [] }); });
+  expect(context.observations[0]).toMatchObject({ kind: "model", outcome: "success" });
+  expect(context.observations[0]).not.toHaveProperty("usage");
+});
+
+test("keeps valid chat token details when adjacent detail fields are invalid", async () => {
+  const context: TurnTraceContext = { rootRunId: "root", stepTimingsMs: new Map(), observations: [], nextObservationSequence: 0 };
+  const model = openRouterModel(config, async () => Response.json({
+    choices: [{ message: { content: "done" } }],
+    usage: {
+      prompt_tokens: 7, completion_tokens: 3, total_tokens: 10, cost: null,
+      prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 1, audio_tokens: null },
+      completion_tokens_details: { reasoning_tokens: 1, image_tokens: "invalid" },
+    },
+  }));
+  await withTurnTraceContext(context, async () => { await model.complete({ systemPrompt: "system", messages: [] }); });
+  expect(context.observations[0]).toMatchObject({
+    kind: "model", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedInputTokens: 2, cacheWriteTokens: 1, reasoningOutputTokens: 1 },
+  });
+  expect(context.observations[0]).not.toHaveProperty("usage.totalCost");
+  expect(context.observations[0]).not.toHaveProperty("usage.audioInputTokens");
+  expect(context.observations[0]).not.toHaveProperty("usage.imageOutputTokens");
+});
 
 test("the adapter sends the bearer token and model and maps a tool call", async () => {
   let seen: { url: string; init: RequestInit } | undefined;
@@ -88,6 +141,7 @@ test("the adapter sends the bearer token and model and maps a tool call", async 
       },
       { role: "tool", tool_call_id: "lookup-1", content: "{\"kind\":\"orders_found\"}" },
     ],
+    usage: { include: true },
     tools: [
       {
         type: "function",
@@ -222,6 +276,7 @@ test("keeps older turns when the body fits in the context window", async () => {
       },
       { role: "tool", tool_call_id: "lookup-1", content: "{\"kind\":\"orders_found\"}" },
     ],
+    usage: { include: true },
     tools: [
       {
         type: "function",
