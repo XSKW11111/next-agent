@@ -32,6 +32,37 @@ test("the configured hard cap rejects protected content before sending a request
   expect(calls).toBe(0);
 });
 
+test("a summary that exceeds the exact request budget falls back to the base prompt", async () => {
+  let sent: unknown;
+  let calls = 0;
+  const model = openRouterModel(
+    { ...config, contextHardTokens: 900 },
+    async (_url, init) => {
+      calls += 1;
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ choices: [{ message: { content: "done" } }] });
+    },
+  );
+  const reply = await model.complete({
+    systemPrompt: `Base instructions.\n\nConversation summary:\n${"memory ".repeat(800)}`,
+    fallbackSystemPrompt: "Base instructions.",
+    messages: [{ role: "user", content: "hello" }],
+  });
+  expect(reply.text).toBe("done");
+  expect(calls).toBe(1);
+  expect(sent).toMatchObject({ messages: [{ role: "system", content: "Base instructions." }, { role: "user", content: "hello" }] });
+});
+
+test("oversized summarization does not send a request", async () => {
+  let calls = 0;
+  const model = openRouterModel({ ...config, contextHardTokens: 100 }, async () => {
+    calls += 1;
+    return Response.json({ choices: [{ message: { content: "unexpected" } }] });
+  });
+  await expect(model.summarize?.("old history ".repeat(1000))).rejects.toBeInstanceOf(ContextBudgetExceeded);
+  expect(calls).toBe(0);
+});
+
 test("the adapter sends the bearer token and model and maps a tool call", async () => {
   let seen: { url: string; init: RequestInit } | undefined;
   const fetchImpl: typeof fetch = async (url, init) => {

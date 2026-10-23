@@ -121,6 +121,11 @@ export class ContextBudgetExceeded extends Error {
 export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): ScriptedModel {
   return {
     async summarize(prompt) {
+      const messages = fitContext(
+        [{ role: "system", content: "Summarize conversation context." }, { role: "user", content: prompt }],
+        [],
+        config.contextHardTokens,
+      );
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -129,7 +134,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
         },
         body: JSON.stringify({
           model: config.model,
-          messages: [{ role: "user", content: prompt }],
+          messages,
           max_tokens: 20_000,
         }),
       });
@@ -140,11 +145,13 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       return reply.text;
     },
     async complete(input) {
-      const messages = fitContext(
-        toChatMessages(input.systemPrompt, input.messages),
-        tools,
-        config.contextHardTokens,
-      );
+      let messages: ChatMessage[];
+      try {
+        messages = fitContext(toChatMessages(input.systemPrompt, input.messages), tools, config.contextHardTokens);
+      } catch (error) {
+        if (!(error instanceof ContextBudgetExceeded) || input.fallbackSystemPrompt === undefined) throw error;
+        messages = fitContext(toChatMessages(input.fallbackSystemPrompt, input.messages), tools, config.contextHardTokens);
+      }
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {

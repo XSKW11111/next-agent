@@ -73,6 +73,7 @@ export type SupportMessage =
 export type ScriptedModel = {
   complete(input: {
     readonly systemPrompt: string;
+    readonly fallbackSystemPrompt?: string;
     readonly messages: readonly SupportMessage[];
   }): ScriptedReply | Promise<ScriptedReply>;
   summarize?(prompt: string): Promise<string>;
@@ -323,6 +324,7 @@ async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
   throwIfAborted(ready.signal);
   const reply = await ready.model.complete({
     systemPrompt: systemPromptWithSummary(state.summary),
+    ...(state.summary.length === 0 ? {} : { fallbackSystemPrompt: supportSystemPrompt }),
     messages: state.messages.slice(state.keptFrom),
   });
   throwIfAborted(ready.signal);
