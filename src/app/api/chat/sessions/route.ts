@@ -27,7 +27,7 @@ export async function POST(
   const owner = ownerForNewSession(request, session.value.id);
   await runtime.sessions.save(session.value, owner.hash);
   const response = Response.json({ id: session.value.id });
-  if (owner.cookie !== undefined) response.headers.set("set-cookie", owner.cookie);
+  for (const cookie of owner.cookies) response.headers.append("set-cookie", cookie);
   return response;
 }
 

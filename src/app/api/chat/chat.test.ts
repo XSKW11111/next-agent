@@ -54,7 +54,10 @@ test("a new browser receives an HttpOnly owner cookie", async () => {
   const runtime = chatRuntime([sessionId]);
   const response = await createSession(new Request("http://localhost/chat", { method: "POST" }), undefined, runtime);
   expect(response.status).toBe(200);
-  expect(response.headers.get("set-cookie")).toMatch(/^next-agent-owner-11111111-1111-4111-8111-111111111111=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax/);
+  expect(response.headers.getSetCookie()).toEqual([
+    expect.stringMatching(/^next-agent-owner-11111111-1111-4111-8111-111111111111=[0-9a-f]{64}; Path=\/chat\/11111111-1111-4111-8111-111111111111; Max-Age=604800; HttpOnly; SameSite=Lax/),
+    expect.stringMatching(/^next-agent-owner-11111111-1111-4111-8111-111111111111=[0-9a-f]{64}; Path=\/api\/chat\/sessions\/11111111-1111-4111-8111-111111111111; Max-Age=604800; HttpOnly; SameSite=Lax/),
+  ]);
 });
 
 test("concurrent fresh tabs receive independent cookies for their sessions", async () => {

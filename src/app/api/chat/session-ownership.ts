@@ -14,13 +14,17 @@ export function ownerHash(request: Request, sessionId: string): string | undefin
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function ownerForNewSession(request: Request, sessionId: string): { hash: string; cookie?: string } {
+export function ownerForNewSession(request: Request, sessionId: string): { hash: string; cookies: readonly string[] } {
   const existing = ownerHash(request, sessionId);
-  if (existing !== undefined) return { hash: existing };
+  if (existing !== undefined) return { hash: existing, cookies: [] };
   const token = randomBytes(32).toString("hex");
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const value = `${cookiePrefix}${sessionId}=${token}`;
   return {
     hash: createHash("sha256").update(token).digest("hex"),
-    cookie: `${cookiePrefix}${sessionId}=${token}; Path=/; HttpOnly; SameSite=Lax${secure}`,
+    cookies: [
+      `${value}; Path=/chat/${sessionId}; Max-Age=604800; HttpOnly; SameSite=Lax${secure}`,
+      `${value}; Path=/api/chat/sessions/${sessionId}; Max-Age=604800; HttpOnly; SameSite=Lax${secure}`,
+    ],
   };
 }
