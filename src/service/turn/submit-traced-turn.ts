@@ -151,6 +151,8 @@ async function saveTracedTurn(
         priorSummary: history.summary,
         priorSequences: history.sequences,
         dependencies: input.dependencies,
+        ...(input.contextWindowTokens === undefined ? {} : { contextWindowTokens: input.contextWindowTokens }),
+        ...(input.contextHardTokens === undefined ? {} : { contextHardTokens: input.contextHardTokens }),
         ...(input.maxToolRounds === undefined ? {} : { maxToolRounds: input.maxToolRounds }),
         ...(input.productMatchThreshold === undefined
           ? {}
@@ -242,12 +244,14 @@ function captureSystemPrompt(
   slot: { value: string },
 ): ScriptedModel {
   const summarize = model.summarize?.bind(model);
+  const requestTokenCount = model.requestTokenCount?.bind(model);
   return {
     complete(input) {
       slot.value = input.systemPrompt;
       return model.complete(input);
     },
     ...(summarize === undefined ? {} : { summarize }),
+    ...(requestTokenCount === undefined ? {} : { requestTokenCount }),
   };
 }
 

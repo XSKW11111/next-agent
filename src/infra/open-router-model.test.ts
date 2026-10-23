@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { AgentConfig } from "./agent-config";
-import { openRouterModel } from "./open-router-model";
+import { ContextBudgetExceeded, openRouterModel } from "./open-router-model";
 
 const config: AgentConfig = {
   openRouterApiKey: "test-openrouter-token",
@@ -14,6 +14,49 @@ const config: AgentConfig = {
   contextHardTokens: 120000,
   debugToolDetails: false,
 };
+
+test("the configured hard cap rejects protected content before sending a request", async () => {
+  let calls = 0;
+  const model = openRouterModel(
+    { ...config, contextHardTokens: 50 },
+    async () => {
+      calls += 1;
+      return Response.json({ choices: [{ message: { content: "unexpected" } }] });
+    },
+  );
+
+  await expect(model.complete({
+    systemPrompt: "system".repeat(30),
+    messages: [{ role: "user", content: "current request" }],
+  })).rejects.toBeInstanceOf(ContextBudgetExceeded);
+  expect(calls).toBe(0);
+});
+
+test("the adapter refuses an oversized summary without silently omitting it", async () => {
+  let calls = 0;
+  const model = openRouterModel(
+    { ...config, contextHardTokens: 900 },
+    async () => {
+      calls += 1;
+      return Response.json({ choices: [{ message: { content: "done" } }] });
+    },
+  );
+  await expect(model.complete({
+    systemPrompt: `Base instructions.\n\nConversation summary:\n${"memory ".repeat(800)}`,
+    messages: [{ role: "user", content: "hello" }],
+  })).rejects.toBeInstanceOf(ContextBudgetExceeded);
+  expect(calls).toBe(0);
+});
+
+test("oversized summarization does not send a request", async () => {
+  let calls = 0;
+  const model = openRouterModel({ ...config, contextHardTokens: 100 }, async () => {
+    calls += 1;
+    return Response.json({ choices: [{ message: { content: "unexpected" } }] });
+  });
+  await expect(model.summarize?.("old history ".repeat(1000))).rejects.toBeInstanceOf(ContextBudgetExceeded);
+  expect(calls).toBe(0);
+});
 
 test("the adapter sends the bearer token and model and maps a tool call", async () => {
   let seen: { url: string; init: RequestInit } | undefined;

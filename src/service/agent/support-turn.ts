@@ -76,6 +76,7 @@ export type ScriptedModel = {
     readonly messages: readonly SupportMessage[];
   }): ScriptedReply | Promise<ScriptedReply>;
   summarize?(prompt: string): Promise<string>;
+  requestTokenCount?(input: { readonly systemPrompt: string; readonly messages: readonly SupportMessage[] }): number;
 };
 
 export type ScriptedReply = {
@@ -117,6 +118,7 @@ export type SupportTurnInput = {
   readonly priorSummary?: string | null;
   readonly priorSequences?: readonly number[];
   readonly contextWindowTokens?: number;
+  readonly contextHardTokens?: number;
   readonly dependencies: SupportTurnDependencies;
   readonly threadId?: string;
   readonly signal?: AbortSignal;
@@ -203,6 +205,7 @@ type ReadyTurn = {
   readonly productMatchThreshold: number | undefined;
   readonly maxProductCandidates: number | undefined;
   readonly contextWindowTokens: number;
+  readonly contextHardTokens: number | undefined;
   readonly dependencies: SupportTurnDependencies;
 };
 
@@ -236,6 +239,7 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     productMatchThreshold: input.productMatchThreshold,
     maxProductCandidates: input.maxProductCandidates,
     contextWindowTokens: input.contextWindowTokens ?? contextWindowTokens,
+    contextHardTokens: input.contextHardTokens,
     dependencies: input.dependencies,
   });
   const seeded = [...seedSupportMessages(input.priorMessages, customerText)];
@@ -299,11 +303,19 @@ function compileSupportGraph(ready: ReadyTurn) {
 async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
   const summarize = ready.model.summarize?.bind(ready.model);
+  const requestTokenCount = ready.model.requestTokenCount?.bind(ready.model);
   const compacted = await compactHistory({
     systemPrompt: supportSystemPrompt,
     messages: compactMessages(state),
     runningSummary: runningSummary(state.summary),
     windowTokens: ready.contextWindowTokens,
+    ...(ready.contextHardTokens === undefined ? {} : { hardTokens: ready.contextHardTokens }),
+    ...(requestTokenCount === undefined ? {} : {
+      requestTokenCount: (summary: RunningSummary | null, keptFrom: number) => requestTokenCount({
+        systemPrompt: systemPromptWithSummary(summary?.summary ?? ""),
+        messages: state.messages.slice(keptFrom),
+      }),
+    }),
     summarize: summarize ?? (async () => {
       throw new SupportTurnRejected("summary model is unavailable");
     }),
@@ -317,9 +329,10 @@ async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Par
 
 async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
+  const selection = await selectAgentContext(state, ready);
   const reply = await ready.model.complete({
-    systemPrompt: systemPromptWithSummary(state.summary),
-    messages: state.messages.slice(state.keptFrom),
+    systemPrompt: systemPromptWithSummary(selection.summary),
+    messages: state.messages.slice(selection.keptFrom),
   });
   throwIfAborted(ready.signal);
   const parsed = replySchema.safeParse(reply);
@@ -329,6 +342,8 @@ async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
 
   const toolCalls = parsed.data.toolCalls ?? [];
   return {
+    summary: selection.summary,
+    keptFrom: selection.keptFrom,
     messages: [
       {
         role: "assistant",
@@ -339,6 +354,35 @@ async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
     draft: parsed.data.text,
     pendingQueue: toolCalls,
   };
+}
+
+async function selectAgentContext(
+  state: TurnChannels,
+  ready: ReadyTurn,
+): Promise<{ summary: string; keptFrom: number }> {
+  const requestTokenCount = ready.model.requestTokenCount?.bind(ready.model);
+  const hardTokens = ready.contextHardTokens;
+  if (requestTokenCount === undefined || hardTokens === undefined ||
+      requestTokenCount({
+        systemPrompt: systemPromptWithSummary(state.summary),
+        messages: state.messages.slice(state.keptFrom),
+      }) <= hardTokens) {
+    return { summary: state.summary, keptFrom: state.keptFrom };
+  }
+  const compacted = await compactHistory({
+    systemPrompt: supportSystemPrompt,
+    messages: compactMessages(state),
+    runningSummary: null,
+    windowTokens: ready.contextWindowTokens,
+    hardTokens,
+    startRatio: 0,
+    requestTokenCount: (_summary, keptFrom) => requestTokenCount({
+      systemPrompt: supportSystemPrompt,
+      messages: state.messages.slice(keptFrom),
+    }),
+    summarize: async () => { throw new SupportTurnRejected("raw context fallback requested"); },
+  });
+  return { summary: "", keptFrom: compacted.keptFrom };
 }
 
 function routeAfterAgent(state: TurnChannels, ready: ReadyTurn): "tools" | typeof END {

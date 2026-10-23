@@ -20,6 +20,8 @@ export type SubmitTurnInput = {
   readonly maxToolRounds?: number;
   readonly productMatchThreshold?: number;
   readonly maxProductCandidates?: number;
+  readonly contextWindowTokens?: number;
+  readonly contextHardTokens?: number;
 };
 
 type RecordedTurn =
@@ -71,6 +73,8 @@ async function saveNewTurn(input: SubmitTurnInput, turn: Turn): Promise<SubmitTu
     priorSummary: history.summary,
     priorSequences: history.sequences,
     dependencies: input.dependencies,
+    ...(input.contextWindowTokens === undefined ? {} : { contextWindowTokens: input.contextWindowTokens }),
+    ...(input.contextHardTokens === undefined ? {} : { contextHardTokens: input.contextHardTokens }),
     ...(input.maxToolRounds === undefined ? {} : { maxToolRounds: input.maxToolRounds }),
     ...(input.productMatchThreshold === undefined
       ? {}

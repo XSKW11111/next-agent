@@ -20,7 +20,23 @@ test("a transcript under 70 percent stays raw and does not call the summarizer",
   });
 
   expect(calls).toBe(0);
-  expect(result).toEqual({ summary: null, keptFrom: 0 });
+  expect(result).toEqual({ kind: "unchanged", summary: null, keptFrom: 0 });
+});
+
+test("exact request overhead triggers compaction before raw history is silently omitted", async () => {
+  let calls = 0;
+  const result = await compactHistory({
+    systemPrompt: "sys",
+    messages: [message("old", "user", "a".repeat(20)), message("current", "user", "new")],
+    runningSummary: null,
+    windowTokens: 100,
+    hardTokens: 70,
+    tokenCounter: byLength,
+    requestTokenCount: (summary, keptFrom) => keptFrom === 0 ? 100 : 30 + (summary?.summary.length ?? 0),
+    summarize: async () => { calls += 1; return "SUM"; },
+  });
+  expect(calls).toBe(1);
+  expect(result).toEqual({ kind: "summarized", summary: { summary: "SUM", summarizedIds: ["old"] }, keptFrom: 1 });
 });
 
 test("overflow from the oldest is summarized once and the newest user message stays raw", async () => {
@@ -50,6 +66,7 @@ test("overflow from the oldest is summarized once and the newest user message st
   expect(seen[0]).toContain("b".repeat(40));
   expect(seen[0]).not.toContain("c".repeat(40));
   expect(result.keptFrom).toBe(2);
+  expect(result.kind).toBe("summarized");
   expect(result.summary).toEqual({
     summary: "SUM",
     summarizedIds: ["old-user", "old-assistant"],
@@ -80,52 +97,84 @@ test("a later pass does not send ids that were already summarized", async () => 
   expect(result.keptFrom).toBe(1);
 });
 
-test("a summary over the reserve does not return a fitted history", async () => {
-  let thrown: unknown;
-  try {
-    await compactHistory({
-      systemPrompt: "sys",
-      messages: [
-        message("old", "user", "a".repeat(40)),
-        message("current", "user", "c".repeat(40)),
-      ],
-      runningSummary: null,
-      windowTokens: 100,
-      startRatio: 0.7,
-      summaryReserveTokens: 5,
-      tokenCounter: byLength,
-      summarize: async () => "too long summary",
-    });
-  } catch (error) {
-    thrown = error;
-  }
+test("an oversized summary falls back to bounded raw history without persisting it", async () => {
+  const result = await compactHistory({
+    systemPrompt: "sys",
+    messages: [
+      message("old", "user", "a".repeat(40)),
+      message("current", "user", "c".repeat(40)),
+    ],
+    runningSummary: null,
+    windowTokens: 100,
+    startRatio: 0.7,
+    summaryReserveTokens: 5,
+    hardTokens: 75,
+    tokenCounter: byLength,
+    summarize: async () => "too long summary",
+  });
 
-  expect(thrown).toBeInstanceOf(ContextSummaryRejected);
+  expect(result).toEqual({ kind: "raw_fallback", summary: null, keptFrom: 1 });
+});
+
+test("a failed summarizer keeps the current user message within the hard cap", async () => {
+  const result = await compactHistory({
+    systemPrompt: "sys",
+    messages: [message("old", "user", "a".repeat(40)), message("current", "user", "c".repeat(40))],
+    runningSummary: null,
+    windowTokens: 100,
+    hardTokens: 75,
+    startRatio: 0.7,
+    tokenCounter: byLength,
+    summarize: async () => { throw new Error("provider unavailable"); },
+  });
+
+  expect(result).toEqual({ kind: "raw_fallback", summary: null, keptFrom: 1 });
+});
+
+test("an existing summary that no longer fits is omitted for this turn", async () => {
+  const result = await compactHistory({
+    systemPrompt: "sys",
+    messages: [message("current", "user", "current")],
+    runningSummary: { summary: "a".repeat(90), summarizedIds: ["old"] },
+    windowTokens: 100,
+    hardTokens: 100,
+    tokenCounter: byLength,
+    summarize: async () => "unused",
+  });
+
+  expect(result).toEqual({ kind: "raw_fallback", summary: null, keptFrom: 0 });
 });
 
 test("the current user message is not summarized when it alone exceeds the raw budget", async () => {
   let calls = 0;
-  let thrown: unknown;
-  try {
-    await compactHistory({
-      systemPrompt: "sys",
-      messages: [message("current", "user", "c".repeat(80))],
-      runningSummary: null,
-      windowTokens: 100,
-      startRatio: 0.7,
-      summaryReserveTokens: 20,
-      tokenCounter: byLength,
-      summarize: async () => {
-        calls += 1;
-        return "SUM";
-      },
-    });
-  } catch (error) {
-    thrown = error;
-  }
+  const result = await compactHistory({
+    systemPrompt: "sys",
+    messages: [message("current", "user", "c".repeat(80))],
+    runningSummary: null,
+    windowTokens: 100,
+    startRatio: 0.7,
+    summaryReserveTokens: 20,
+    tokenCounter: byLength,
+    summarize: async () => {
+      calls += 1;
+      return "SUM";
+    },
+  });
 
   expect(calls).toBe(0);
-  expect(thrown).toBeInstanceOf(ContextSummaryRejected);
+  expect(result).toEqual({ kind: "raw_fallback", summary: null, keptFrom: 0 });
+});
+
+test("protected system and current user content over the hard cap rejects", async () => {
+  await expect(compactHistory({
+    systemPrompt: "sys",
+    messages: [message("current", "user", "c".repeat(80))],
+    runningSummary: null,
+    windowTokens: 100,
+    hardTokens: 70,
+    tokenCounter: byLength,
+    summarize: async () => "SUM",
+  })).rejects.toBeInstanceOf(ContextSummaryRejected);
 });
 
 function message(id: string, role: CompactMessage["role"], content: string): CompactMessage {
