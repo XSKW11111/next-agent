@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 
-const cookieName = "next-agent-owner";
+const cookiePrefix = "next-agent-owner-";
 const tokenPattern = /^[0-9a-f]{64}$/;
 
-export function ownerHash(request: Request): string | undefined {
+export function ownerHash(request: Request, sessionId: string): string | undefined {
+  const cookieName = `${cookiePrefix}${sessionId}`;
   const cookie = request.headers.get("cookie")
     ?.split(";")
     .map((part) => part.trim())
@@ -13,13 +14,13 @@ export function ownerHash(request: Request): string | undefined {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function ownerForNewSession(request: Request): { hash: string; cookie?: string } {
-  const existing = ownerHash(request);
+export function ownerForNewSession(request: Request, sessionId: string): { hash: string; cookie?: string } {
+  const existing = ownerHash(request, sessionId);
   if (existing !== undefined) return { hash: existing };
   const token = randomBytes(32).toString("hex");
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   return {
     hash: createHash("sha256").update(token).digest("hex"),
-    cookie: `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax${secure}`,
+    cookie: `${cookiePrefix}${sessionId}=${token}; Path=/; HttpOnly; SameSite=Lax${secure}`,
   };
 }

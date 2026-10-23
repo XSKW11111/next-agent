@@ -26,7 +26,7 @@ export async function postHandoff(
   if (!sessionId.success || !proposalId.success) {
     return Response.json({ code: "invalid" }, { status: 400 });
   }
-  const owner = ownerHash(request);
+  const owner = ownerHash(request, sessionId.data);
   if (owner === undefined || (await runtime.sessions.findOwned(sessionId.data, owner)) === undefined) {
     return Response.json({ code: "missing" }, { status: 404 });
   }

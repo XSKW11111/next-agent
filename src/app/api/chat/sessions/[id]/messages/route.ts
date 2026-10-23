@@ -23,7 +23,7 @@ export async function POST(
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
-  const owner = ownerHash(request);
+  const owner = ownerHash(request, sessionId.value);
   if (owner === undefined) return missing();
   const session = await runtime.sessions.findOwned(sessionId.value, owner);
   if (session === undefined) return missing();
@@ -102,7 +102,7 @@ export async function GET(
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
-  const owner = ownerHash(request);
+  const owner = ownerHash(request, sessionId.value);
   if (owner === undefined || (await runtime.sessions.findOwned(sessionId.value, owner)) === undefined) return missing();
 
   const messages = await runtime.messages.messagesForSession(sessionId.value);

@@ -24,7 +24,7 @@ export async function POST(
   });
   if (!session.ok) throw new Error("session is invalid");
 
-  const owner = ownerForNewSession(request);
+  const owner = ownerForNewSession(request, session.value.id);
   await runtime.sessions.save(session.value, owner.hash);
   const response = Response.json({ id: session.value.id });
   if (owner.cookie !== undefined) response.headers.set("set-cookie", owner.cookie);

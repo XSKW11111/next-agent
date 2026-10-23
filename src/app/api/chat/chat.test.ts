@@ -26,10 +26,9 @@ import { POST as cancelProposal } from "./sessions/[id]/handoffs/[proposalId]/ca
 import { installChatRuntime, type ChatRuntime, type SessionStore } from "./runtime";
 import { ownerHash } from "./session-ownership";
 
-const ownerCookie = `next-agent-owner=${"a".repeat(64)}`;
-
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const otherSessionId = "55555555-5555-4555-8555-555555555555";
+const ownerCookie = `next-agent-owner-${sessionId}=${"a".repeat(64)}`;
 const turnId = "22222222-2222-4222-8222-222222222222";
 const proposalId = "33333333-3333-4333-8333-333333333333";
 
@@ -55,12 +54,30 @@ test("a new browser receives an HttpOnly owner cookie", async () => {
   const runtime = chatRuntime([sessionId]);
   const response = await createSession(new Request("http://localhost/chat", { method: "POST" }), undefined, runtime);
   expect(response.status).toBe(200);
-  expect(response.headers.get("set-cookie")).toMatch(/^next-agent-owner=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax/);
+  expect(response.headers.get("set-cookie")).toMatch(/^next-agent-owner-11111111-1111-4111-8111-111111111111=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax/);
+});
+
+test("concurrent fresh tabs receive independent cookies for their sessions", async () => {
+  const runtime = chatRuntime([sessionId, otherSessionId]);
+  const [first, second] = await Promise.all([
+    createSession(new Request("http://localhost/chat", { method: "POST" }), undefined, runtime),
+    createSession(new Request("http://localhost/chat", { method: "POST" }), undefined, runtime),
+  ]);
+  const firstCookie = first.headers.get("set-cookie")?.split(";")[0];
+  const secondCookie = second.headers.get("set-cookie")?.split(";")[0];
+  expect(firstCookie).toBeDefined();
+  expect(secondCookie).toBeDefined();
+  const combined = `${firstCookie}; ${secondCookie}`;
+  const firstId = (await first.json()).id;
+  const secondId = (await second.json()).id;
+  expect(firstId).not.toBe(secondId);
+  expect((await readMessages(new Request("http://localhost/messages", { headers: { cookie: combined } }), sessionContext(firstId), runtime)).status).toBe(200);
+  expect((await readMessages(new Request("http://localhost/messages", { headers: { cookie: combined } }), sessionContext(secondId), runtime)).status).toBe(200);
 });
 
 test("a session URL does not authorize a different browser to read or write", async () => {
   const runtime = await startedRuntime(replyModel({ count: 0 }, "Private reply"));
-  const unauthorized = { cookie: `next-agent-owner=${"b".repeat(64)}` };
+  const unauthorized = { cookie: `next-agent-owner-${sessionId}=${"b".repeat(64)}` };
   const history = await readMessages(
     new Request("http://localhost/messages", { headers: unauthorized }),
     sessionContext(sessionId),
@@ -81,8 +98,8 @@ test("a session URL does not authorize a different browser to read or write", as
     runtime,
   );
   expect([history.status, send.status, handoff.status]).toEqual([404, 404, 404]);
-  expect(ownerHash(new Request("http://localhost", { headers: unauthorized }))).not.toBe(
-    ownerHash(new Request("http://localhost", { headers: { cookie: ownerCookie } })),
+  expect(ownerHash(new Request("http://localhost", { headers: unauthorized }), sessionId)).not.toBe(
+    ownerHash(new Request("http://localhost", { headers: { cookie: ownerCookie } }), sessionId),
   );
 });
 
