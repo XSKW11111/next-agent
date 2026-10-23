@@ -34,6 +34,10 @@ function validId(value) {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
+function record(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function body(request) {
   let raw = "";
   for await (const chunk of request) {
@@ -55,18 +59,18 @@ export const server = createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/stats") return json(response, 200, counts.get());
     if (request.method === "POST" && url.pathname === "/sessions") {
       const input = await body(request);
-      if (!validId(input.id)) return json(response, 400, { error: "invalid session id" });
+      if (!record(input) || !validId(input.id)) return json(response, 400, { error: "invalid session id" });
       insertSession.run(input.id);
       return json(response, 200, { streak: readStreak.get(input.id).streak });
     }
     if (request.method === "PUT" && url.pathname === "/streak") {
       const input = await body(request);
-      if (!validId(input.id) || ![0, 1, 2].includes(input.streak)) return json(response, 400, { error: "invalid streak" });
+      if (!record(input) || !validId(input.id) || ![0, 1, 2].includes(input.streak)) return json(response, 400, { error: "invalid streak" });
       return json(response, updateStreak.run(input.streak, input.id).changes === 1 ? 200 : 404, { ok: true });
     }
     if (request.method === "POST" && url.pathname === "/messages") {
       const input = await body(request);
-      if (!validId(input.sessionId) || !validId(input.turnId) || typeof input.customerText !== "string" ||
+      if (!record(input) || !validId(input.sessionId) || !validId(input.turnId) || typeof input.customerText !== "string" ||
           typeof input.reply !== "string" || input.customerText.length === 0 || input.reply.length === 0) {
         return json(response, 400, { error: "invalid messages" });
       }

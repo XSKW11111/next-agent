@@ -37,6 +37,9 @@ test("SQLite owns sessions and atomically stores a customer and assistant pair",
 
 test("invalid message input cannot write a partial pair", async () => {
   assert.equal((await request("/messages", "POST", { sessionId: "bad" })).status, 400);
+  assert.equal((await request("/messages", "POST", null)).status, 400);
+  assert.equal((await request("/sessions", "POST", null)).status, 400);
+  assert.equal((await request("/streak", "PUT", null)).status, 400);
   const stats = await fetch(`${base}/stats`).then((response) => response.json());
   assert.equal(stats.customers, 1);
   assert.equal(stats.assistants, 1);

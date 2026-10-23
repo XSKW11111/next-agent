@@ -8,7 +8,7 @@ The live chat stores sessions and messages in Supabase and calls an external mod
 
 Run `bash scripts/local-load/run-kind.sh` while Docker and a kind cluster are available. The command checks the selected kind context, builds local images, creates only the `next-agent-load` namespace, starts SQLite, Redis, and two agent replicas, then sends 1,000 HTTP `POST /turn` requests at 64 concurrent clients. It prints one JSON report and exits nonzero if a request fails, an answer is wrong, or SQLite does not contain 1,000 complete message pairs.
 
-The caller can set `KIND_CLUSTER` for another kind cluster. `LOAD_TURNS` and `LOAD_CONCURRENCY` in the Job manifest set the request count and client limit. The default run uses 1,000 and 64. A repeated run restarts the disposable SQLite pod, clears its `emptyDir` data, and creates a new Job. To remove this disposable environment, run `kubectl delete namespace next-agent-load`.
+The caller can set `KIND_CLUSTER` for another kind cluster. `LOAD_TURNS` and `LOAD_CONCURRENCY` in the Job manifest set the request count and client limit. The default run uses 1,000 and 64. A repeated run restarts the disposable SQLite and Redis pods, clears their prior state, and creates a new Job. To remove this disposable environment, run `kubectl delete namespace next-agent-load`.
 
 The agent service exposes one test endpoint. `POST /turn` accepts `{ "requestId": "<uuid>" }` and returns the session ID, turn ID, checked reply, and cache outcome. A sequential retry with the same request ID preserves the stored pair. Concurrent duplicate calls to the same session are outside this one-turn workload. The load client checks the response and the SQLite count after all requests finish.
 
@@ -108,7 +108,7 @@ The SQLite server validates UUIDs, text fields, and body size at the HTTP bounda
 
 The JSON report gives p50, p95, maximum latency, total duration, throughput, request errors, cache outcomes, and SQLite row counts. These are observations from this local scripted workload. They cannot establish production throughput. Before claiming a speedup or choosing a capacity limit, run repeated trials with a known limiter, inspect CPU and memory of the load client and SQLite pod, and compare the same workload under controlled settings.
 
-The namespace is `next-agent-load`. The script checks that the current context is the selected kind cluster before any apply. It changes only resources in that namespace. The SQLite database file, Redis data, test logs, and any local secrets are ignored by Git. The Kubernetes manifests and test code are tracked so another engineer can repeat the run.
+The namespace is `next-agent-load`. The script checks that the current context is the selected kind cluster before any apply. The Job has a 290-second deadline; a failed wait removes it after printing logs. It changes only resources in that namespace. The SQLite database file, Redis data, test logs, and any local secrets are ignored by Git. The Kubernetes manifests and test code are tracked so another engineer can repeat the run.
 
 ## Open questions and risks
 

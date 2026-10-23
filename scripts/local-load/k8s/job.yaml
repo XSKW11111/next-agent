@@ -5,6 +5,7 @@ metadata:
   namespace: next-agent-load
 spec:
   backoffLimit: 0
+  activeDeadlineSeconds: 290
   template:
     spec:
       restartPolicy: Never

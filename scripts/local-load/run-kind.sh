@@ -22,9 +22,12 @@ kubectl -n next-agent-load rollout status deployment/agent --timeout=120s
 kubectl -n next-agent-load delete job agent-load --ignore-not-found
 kubectl -n next-agent-load rollout restart deployment/sqlite
 kubectl -n next-agent-load rollout status deployment/sqlite --timeout=120s
+kubectl -n next-agent-load rollout restart deployment/redis
+kubectl -n next-agent-load rollout status deployment/redis --timeout=120s
 kubectl apply -f scripts/local-load/k8s/job.yaml
 kubectl -n next-agent-load wait --for=condition=complete job/agent-load --timeout=300s || {
   kubectl -n next-agent-load logs job/agent-load --all-containers=true
+  kubectl -n next-agent-load delete job agent-load --ignore-not-found
   exit 1
 }
 kubectl -n next-agent-load logs job/agent-load --all-containers=true
