@@ -62,6 +62,29 @@ test("a new traced turn records domain input and output on the root run", async 
   });
 });
 
+test("traced turns retain exact request accounting through the model wrapper", async () => {
+  let counts = 0;
+  const model: ScriptedModel = {
+    requestTokenCount() { counts += 1; return 100; },
+    async complete() { return { text: "On the way." }; },
+  };
+  const result = await submitTracedTurn({
+    sessionId,
+    turnId,
+    text: "where is my order",
+    messages: memoryMessages(),
+    model,
+    dependencies: dependencies(),
+    tracing: createTurnTracingSession({
+      config: { apiKey: "test", project: "unit" },
+      client: memoryLangSmithRunsPort(),
+    }),
+    contextHardTokens: 7_000,
+  });
+  expect(result.kind).toBe("reply");
+  expect(counts).toBeGreaterThan(0);
+});
+
 test("a same-text retry returns the saved reply without a second root run", async () => {
   const messages = memoryMessages();
   const client = memoryLangSmithRunsPort();

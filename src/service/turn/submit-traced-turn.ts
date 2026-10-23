@@ -244,12 +244,14 @@ function captureSystemPrompt(
   slot: { value: string },
 ): ScriptedModel {
   const summarize = model.summarize?.bind(model);
+  const requestTokenCount = model.requestTokenCount?.bind(model);
   return {
     complete(input) {
       slot.value = input.systemPrompt;
       return model.complete(input);
     },
     ...(summarize === undefined ? {} : { summarize }),
+    ...(requestTokenCount === undefined ? {} : { requestTokenCount }),
   };
 }
 
