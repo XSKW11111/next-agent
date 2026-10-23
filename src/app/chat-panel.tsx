@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import type { Proposal } from "../domain/handoff";
 import type { CustomerToolCard } from "../service/tool/customer-tool-cards";
@@ -18,94 +18,14 @@ import { historyMessages, type ChatMessage, type HistoryBody } from "./history-m
 const HandoffCard = dynamic(() => import("./handoff-card").then((mod) => mod.HandoffCard), { ssr: false });
 const ToolCards = dynamic(() => import("./tool-cards").then((mod) => mod.ToolCards), { ssr: false });
 
-const sessionKey = "next-agent-session-id";
-
-export function ChatPanel() {
-  const stored = useSyncExternalStore(subscribeSession, readSession, () => null);
-  const [created, setCreated] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [queued, setQueued] = useState<string | null>(null);
-  const sentQueuedRef = useRef(false);
-  const sessionStartRequestedRef = useRef(false);
-  const sessionId = stored ?? created;
-  const restoreHistory = stored !== null;
-
-  useEffect(() => {
-    if (sessionId !== null || readSession() !== null || sessionStartRequestedRef.current) return;
-    sessionStartRequestedRef.current = true;
-    void startSession(setCreated, setFailed);
-  }, [sessionId]);
-
-  if (sessionId === null) {
-    return (
-      <CleanChat
-        failed={failed}
-        draft={draft}
-        queued={queued}
-        onDraft={setDraft}
-        onQueue={setQueued}
-      />
-    );
-  }
-  return (
-    <ChatThread
-      key={sessionId}
-      sessionId={sessionId}
-      restoreHistory={restoreHistory}
-      draft={draft}
-      queued={queued}
-      sentQueuedRef={sentQueuedRef}
-    />
-  );
-}
-
-function CleanChat({
-  failed,
-  draft,
-  queued,
-  onDraft,
-  onQueue,
-}: {
-  failed: boolean;
-  draft: string;
-  queued: string | null;
-  onDraft: (value: string) => void;
-  onQueue: (value: string) => void;
-}) {
-  const canSend =
-    queued === null &&
-    sendAllowed({ failed, restoreHistory: false, historyReady: false, status: "ready" });
-  return (
-    <ChatLayout
-      messages={queued === null ? [] : [pendingMessage(queued)]}
-      sessionId={null}
-      canSend={canSend}
-      input={queued ?? draft}
-      onInput={queued === null ? onDraft : undefined}
-      onSubmit={() => {
-        const text = draft.trim();
-        if (text === "" || !canSend) return;
-        onQueue(text);
-        onDraft("");
-      }}
-      notice={failed ? "The chat session could not be started." : undefined}
-    />
-  );
+export function ChatPanel({ sessionId }: { sessionId: string }) {
+  return <ChatThread sessionId={sessionId} />;
 }
 
 function ChatThread({
   sessionId,
-  restoreHistory,
-  draft,
-  queued,
-  sentQueuedRef,
 }: {
   sessionId: string;
-  restoreHistory: boolean;
-  draft: string;
-  queued: string | null;
-  sentQueuedRef: { current: boolean };
 }) {
   const { messages, sendMessage, setMessages, status } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({
@@ -117,12 +37,11 @@ function ChatThread({
       },
     }),
   });
-  const [input, setInput] = useState(draft);
-  const [historyReady, setHistoryReady] = useState(!restoreHistory);
-  const canSend = sendAllowed({ failed: false, restoreHistory, historyReady, status });
+  const [input, setInput] = useState("");
+  const [historyReady, setHistoryReady] = useState(false);
+  const canSend = sendAllowed({ failed: false, restoreHistory: true, historyReady, status });
 
   useEffect(() => {
-    if (!restoreHistory) return;
     let cancelled = false;
     void fetch(`/api/chat/sessions/${sessionId}/messages`)
       .then(async (response) => {
@@ -138,17 +57,11 @@ function ChatThread({
     return () => {
       cancelled = true;
     };
-  }, [restoreHistory, sessionId, setMessages]);
-
-  useEffect(() => {
-    if (queued === null || !canSend || sentQueuedRef.current) return;
-    sentQueuedRef.current = true;
-    void sendMessage({ text: queued });
-  }, [queued, canSend, sendMessage, sentQueuedRef]);
+  }, [sessionId, setMessages]);
 
   return (
     <ChatLayout
-      messages={messages.length === 0 && queued !== null ? [pendingMessage(queued)] : messages}
+      messages={messages}
       sessionId={sessionId}
       canSend={canSend}
       input={input}
@@ -167,15 +80,13 @@ function ChatLayout({
   messages,
   sessionId,
   canSend,
-  notice,
   input = "",
   onInput,
   onSubmit,
 }: {
   messages: readonly ChatMessage[];
-  sessionId: string | null;
+  sessionId: string;
   canSend: boolean;
-  notice?: string;
   input?: string;
   onInput?: (value: string) => void;
   onSubmit?: () => void;
@@ -185,7 +96,6 @@ function ChatLayout({
       <ChatCard>
         <ChatHeading />
         <ChatTranscript>
-          {notice === undefined ? null : <p className="text-sm text-muted">{notice}</p>}
           {messages.length === 0 ? <p className="text-sm text-muted">Ask about an order, a product, or a person.</p> : null}
           {messages.map((message) => {
             const cards = toolCardsOf(message);
@@ -204,7 +114,7 @@ function ChatLayout({
                     <ToolCards cards={cards} />
                   </div>
                 )}
-                {proposal === undefined || sessionId === null ? null : (
+                {proposal === undefined ? null : (
                   <div className="w-full max-w-[80%] self-start">
                     <HandoffCard
                       key={`${proposal.id}:${proposal.decision}`}
@@ -235,47 +145,8 @@ function toolCardsOf(message: ChatMessage): CustomerToolCard[] | undefined {
   return part.data;
 }
 
-function pendingMessage(text: string): ChatMessage {
-  return { id: "pending", role: "user", parts: [{ type: "text", text }] };
-}
-
 function textFrom(message: ChatMessage): string {
   return message.parts
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("");
-}
-
-function subscribeSession(): () => void {
-  return () => undefined;
-}
-
-function readSession(): string | null {
-  return sessionStorage.getItem(sessionKey);
-}
-
-async function startSession(
-  setSessionId: (sessionId: string) => void,
-  setFailed: (failed: boolean) => void,
-): Promise<void> {
-  try {
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const response = await fetch("/api/chat/sessions", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ timezone }),
-    });
-    if (!response.ok) {
-      setFailed(true);
-      return;
-    }
-    const body = (await response.json()) as { id?: unknown };
-    if (typeof body.id !== "string") {
-      setFailed(true);
-      return;
-    }
-    sessionStorage.setItem(sessionKey, body.id);
-    setSessionId(body.id);
-  } catch {
-    setFailed(true);
-  }
 }

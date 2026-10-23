@@ -8,8 +8,8 @@ import type { MessageStore } from "../../../service/turn/message-store";
 import type { TurnTracingSession } from "../../../service/turn/submit-traced-turn";
 
 export type SessionStore = {
-  save(session: Session): Promise<void>;
-  find(id: SessionId): Promise<Session | undefined>;
+  save(session: Session, ownerHash: string): Promise<void>;
+  findOwned(id: SessionId, ownerHash: string): Promise<Session | undefined>;
 };
 
 export type ChatRuntime = {

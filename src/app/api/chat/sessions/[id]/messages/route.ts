@@ -4,6 +4,7 @@ import { parseTurn } from "../../../../../../domain/turn";
 import { submitTracedTurn } from "../../../../../../service/turn/submit-traced-turn";
 import type { CustomerToolCard } from "../../../../../../service/tool/customer-tool-cards";
 import { currentChatRuntime, type ChatRuntime } from "../../../runtime";
+import { ownerHash } from "../../../session-ownership";
 import { uiMessageStreamResponse } from "../../../ui-message-stream";
 
 const sendTurnBodySchema = z.strictObject({
@@ -22,7 +23,9 @@ export async function POST(
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
-  const session = await runtime.sessions.find(sessionId.value);
+  const owner = ownerHash(request);
+  if (owner === undefined) return missing();
+  const session = await runtime.sessions.findOwned(sessionId.value, owner);
   if (session === undefined) return missing();
 
   const body = await readBody(request);
@@ -93,13 +96,14 @@ export async function POST(
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: SessionContext,
   runtime: ChatRuntime = currentChatRuntime(),
 ): Promise<Response> {
   const sessionId = await readSessionId(context);
   if (!sessionId.ok) return invalid();
-  if ((await runtime.sessions.find(sessionId.value)) === undefined) return missing();
+  const owner = ownerHash(request);
+  if (owner === undefined || (await runtime.sessions.findOwned(sessionId.value, owner)) === undefined) return missing();
 
   const messages = await runtime.messages.messagesForSession(sessionId.value);
   return Response.json({

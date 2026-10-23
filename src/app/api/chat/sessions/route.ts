@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseSession, type LocalTimezone } from "../../../../domain/session";
 import { currentChatRuntime, type ChatRuntime } from "../runtime";
+import { ownerForNewSession } from "../session-ownership";
 
 const createSessionBodySchema = z.strictObject({
   timezone: z.string().optional(),
@@ -23,8 +24,11 @@ export async function POST(
   });
   if (!session.ok) throw new Error("session is invalid");
 
-  await runtime.sessions.save(session.value);
-  return Response.json({ id: session.value.id });
+  const owner = ownerForNewSession(request);
+  await runtime.sessions.save(session.value, owner.hash);
+  const response = Response.json({ id: session.value.id });
+  if (owner.cookie !== undefined) response.headers.set("set-cookie", owner.cookie);
+  return response;
 }
 
 function timezoneFromName(name: string | undefined): LocalTimezone {

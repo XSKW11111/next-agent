@@ -39,23 +39,25 @@ type Table = {
 };
 
 export function supabaseSessions(client: SupabaseClient): {
-  save(session: Session): Promise<void>;
-  find(id: SessionId): Promise<Session | undefined>;
+  save(session: Session, ownerHash: string): Promise<void>;
+  findOwned(id: SessionId, ownerHash: string): Promise<Session | undefined>;
 } {
   return {
-    async save(session) {
+    async save(session, ownerHash) {
       const { error } = await table(client, "sessions").insert({
         id: session.id,
+        owner_hash: ownerHash,
         source: "web",
         next_message_sequence: 1,
         unmatched_order_count: session.unmatchedOrderStreak,
       });
       if (error) fail("session save failed", error.code);
     },
-    async find(id) {
+    async findOwned(id, ownerHash) {
       const { data, error } = await table(client, "sessions")
         .select("id, unmatched_order_count, next_message_sequence")
         .eq("id", id)
+        .eq("owner_hash", ownerHash)
         .maybeSingle();
       if (error) fail("session read failed", error.code);
       if (data === null) return undefined;

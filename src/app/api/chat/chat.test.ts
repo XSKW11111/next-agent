@@ -24,6 +24,9 @@ import { GET as readMessages, POST as sendMessage } from "./sessions/[id]/messag
 import { POST as confirmProposal } from "./sessions/[id]/handoffs/[proposalId]/confirm/route";
 import { POST as cancelProposal } from "./sessions/[id]/handoffs/[proposalId]/cancel/route";
 import { installChatRuntime, type ChatRuntime, type SessionStore } from "./runtime";
+import { ownerHash } from "./session-ownership";
+
+const ownerCookie = `next-agent-owner=${"a".repeat(64)}`;
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const otherSessionId = "55555555-5555-4555-8555-555555555555";
@@ -46,6 +49,41 @@ test("POST /api/chat/sessions returns 200 and a session id when Next passes two 
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ id: sessionId });
+});
+
+test("a new browser receives an HttpOnly owner cookie", async () => {
+  const runtime = chatRuntime([sessionId]);
+  const response = await createSession(new Request("http://localhost/chat", { method: "POST" }), undefined, runtime);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("set-cookie")).toMatch(/^next-agent-owner=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Lax/);
+});
+
+test("a session URL does not authorize a different browser to read or write", async () => {
+  const runtime = await startedRuntime(replyModel({ count: 0 }, "Private reply"));
+  const unauthorized = { cookie: `next-agent-owner=${"b".repeat(64)}` };
+  const history = await readMessages(
+    new Request("http://localhost/messages", { headers: unauthorized }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const send = await sendMessage(
+    new Request("http://localhost/messages", {
+      method: "POST",
+      headers: { ...unauthorized, "content-type": "application/json" },
+      body: JSON.stringify({ turnId, text: "read their chat" }),
+    }),
+    sessionContext(sessionId),
+    runtime,
+  );
+  const handoff = await confirmProposal(
+    new Request("http://localhost/confirm", { method: "POST", headers: unauthorized }),
+    handoffContext(sessionId, proposalId),
+    runtime,
+  );
+  expect([history.status, send.status, handoff.status]).toEqual([404, 404, 404]);
+  expect(ownerHash(new Request("http://localhost", { headers: unauthorized }))).not.toBe(
+    ownerHash(new Request("http://localhost", { headers: { cookie: ownerCookie } })),
+  );
 });
 
 test("POST /api/chat/sessions returns the id and stores the timezone", async () => {
@@ -199,7 +237,7 @@ test("nine product searches store one assistant reply and a retry does not run t
     sessionContext(sessionId),
     runtime,
   );
-  const read = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+  const read = await readMessages(new Request("http://localhost/messages", { headers: { cookie: ownerCookie } }), sessionContext(sessionId), runtime);
 
   expect(first.status).toBe(200);
   expect(await replyText(first)).toBe("Nine products are listed.");
@@ -265,7 +303,7 @@ test("GET /api/chat/sessions/:id/messages returns the stored messages", async ()
     runtime,
   );
 
-  const response = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+  const response = await readMessages(new Request("http://localhost/messages", { headers: { cookie: ownerCookie } }), sessionContext(sessionId), runtime);
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
@@ -336,8 +374,8 @@ test("a saved tool card survives a second read and a later turn has no tool role
     proposals: [],
     toolCards: [{ turnId, cards: [card] }],
   };
-  const read = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
-  const again = await readMessages(new Request("http://localhost/messages"), sessionContext(sessionId), runtime);
+  const read = await readMessages(new Request("http://localhost/messages", { headers: { cookie: ownerCookie } }), sessionContext(sessionId), runtime);
+  const again = await readMessages(new Request("http://localhost/messages", { headers: { cookie: ownerCookie } }), sessionContext(sessionId), runtime);
   expect(await read.json()).toEqual(listed);
   expect(await again.json()).toEqual(listed);
 
@@ -379,12 +417,12 @@ test("confirm creates the open case and a later cancel leaves it", async () => {
   captureHandoff(runtime.proposals, personInput());
 
   const confirmed = await confirmProposal(
-    new Request("http://localhost/confirm", { method: "POST" }),
+    new Request("http://localhost/confirm", { method: "POST", headers: { cookie: ownerCookie } }),
     handoffContext(sessionId, proposalId),
     runtime,
   );
   const later = await cancelProposal(
-    new Request("http://localhost/cancel", { method: "POST" }),
+    new Request("http://localhost/cancel", { method: "POST", headers: { cookie: ownerCookie } }),
     handoffContext(sessionId, proposalId),
     runtime,
   );
@@ -401,12 +439,12 @@ test("cancel creates no case and a later confirm leaves that decision", async ()
   captureHandoff(runtime.proposals, personInput());
 
   const cancelled = await cancelProposal(
-    new Request("http://localhost/cancel", { method: "POST" }),
+    new Request("http://localhost/cancel", { method: "POST", headers: { cookie: ownerCookie } }),
     handoffContext(sessionId, proposalId),
     runtime,
   );
   const later = await confirmProposal(
-    new Request("http://localhost/confirm", { method: "POST" }),
+    new Request("http://localhost/confirm", { method: "POST", headers: { cookie: ownerCookie } }),
     handoffContext(sessionId, proposalId),
     runtime,
   );
@@ -458,7 +496,7 @@ async function streamEvents(response: Response): Promise<Array<{ type: string; d
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/chat", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", cookie: ownerCookie },
     body: JSON.stringify(body),
   });
 }
@@ -558,16 +596,17 @@ function messageRow(sequence: number, id: string, role: TurnMessage["role"], con
 }
 
 function memorySessions(): SessionStore & { saved(): readonly Session[] } {
-  const sessions = new Map<string, Session>();
+  const sessions = new Map<string, { session: Session; ownerHash: string }>();
   return {
-    async save(session) {
-      sessions.set(session.id, session);
+    async save(session, hash) {
+      sessions.set(session.id, { session, ownerHash: hash });
     },
-    async find(id) {
-      return sessions.get(id);
+    async findOwned(id, hash) {
+      const stored = sessions.get(id);
+      return stored?.ownerHash === hash ? stored.session : undefined;
     },
     saved() {
-      return [...sessions.values()];
+      return [...sessions.values()].map((stored) => stored.session);
     },
   };
 }

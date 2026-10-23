@@ -6,9 +6,9 @@ type HandoffContext = {
 };
 
 export function POST(
-  _request: Request,
+  request: Request,
   context: HandoffContext,
   runtime: ChatRuntime = currentChatRuntime(),
 ): Promise<Response> {
-  return postHandoff(context, runtime, "cancel");
+  return postHandoff(request, context, runtime, "cancel");
 }

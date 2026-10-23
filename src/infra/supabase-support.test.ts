@@ -15,13 +15,16 @@ describe("supabaseSessions", () => {
     });
     if (!session.ok) throw new Error("fixture session did not parse");
 
-    await sessions.save(session.value);
-    await expect(sessions.find(session.value.id)).resolves.toEqual({
+    const ownerHash = "a".repeat(64);
+    await sessions.save(session.value, ownerHash);
+    await expect(sessions.findOwned(session.value.id, ownerHash)).resolves.toEqual({
       ...session.value,
       localTimezone: { kind: "unresolved" },
     });
+    await expect(sessions.findOwned(session.value.id, "b".repeat(64))).resolves.toBeUndefined();
     expect(rows.get(session.value.id)).toEqual({
       id: session.value.id,
+      owner_hash: ownerHash,
       source: "web",
       unmatched_order_count: 0,
       next_message_sequence: 1,
@@ -89,7 +92,8 @@ function fakeClient(rows: Map<string, Record<string, unknown>>): SupabaseClient 
             },
             maybeSingle() {
               const row = rows.get(String(filters.get("id")));
-              return Promise.resolve({ data: row ?? null, error: null });
+              const matches = row !== undefined && [...filters].every(([column, value]) => row[column] === value);
+              return Promise.resolve({ data: matches ? row : null, error: null });
             },
             then(onFulfilled: (value: { data: unknown; error: null }) => unknown, onRejected?: (reason: unknown) => unknown) {
               const data =
