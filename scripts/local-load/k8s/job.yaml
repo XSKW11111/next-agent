@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-load
+  namespace: next-agent-load
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: agent-load
+          image: next-agent-load-runner:local
+          imagePullPolicy: Never
+          command: ["node", "load.js"]
+          env:
+            - name: LOAD_TURNS
+              value: "1000"
+            - name: LOAD_CONCURRENCY
+              value: "64"
+            - name: AGENT_URL
+              value: http://agent:3002
+            - name: SQLITE_URL
+              value: http://sqlite:3001
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
