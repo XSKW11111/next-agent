@@ -148,15 +148,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       return reply.text;
     },
     async complete(input) {
-      let messages: ChatMessage[];
-      let contextFallbackUsed = false;
-      try {
-        messages = fitContext(toChatMessages(input.systemPrompt, input.messages), tools, config.contextHardTokens);
-      } catch (error) {
-        if (!(error instanceof ContextBudgetExceeded) || input.fallbackSystemPrompt === undefined) throw error;
-        messages = fitContext(toChatMessages(input.fallbackSystemPrompt, input.messages), tools, config.contextHardTokens);
-        contextFallbackUsed = true;
-      }
+      const messages = fitContext(toChatMessages(input.systemPrompt, input.messages), tools, config.contextHardTokens);
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -172,8 +164,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       if (!response.ok) {
         throw await failedResponse(response, config.debugToolDetails);
       }
-      const reply = await readReply(response, config.debugToolDetails);
-      return contextFallbackUsed ? { ...reply, contextFallbackUsed } : reply;
+      return readReply(response, config.debugToolDetails);
     },
   };
 }

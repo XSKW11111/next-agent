@@ -43,7 +43,6 @@ const toolCallSchema = z.strictObject({
 const replySchema = z.strictObject({
   text: z.string(),
   toolCalls: z.array(toolCallSchema).optional(),
-  contextFallbackUsed: z.boolean().optional(),
 });
 
 const customerTextSchema = z.string().trim().min(1);
@@ -74,7 +73,6 @@ export type SupportMessage =
 export type ScriptedModel = {
   complete(input: {
     readonly systemPrompt: string;
-    readonly fallbackSystemPrompt?: string;
     readonly messages: readonly SupportMessage[];
   }): ScriptedReply | Promise<ScriptedReply>;
   summarize?(prompt: string): Promise<string>;
@@ -84,7 +82,6 @@ export type ScriptedModel = {
 export type ScriptedReply = {
   readonly text: string;
   readonly toolCalls?: readonly ModelToolCall[];
-  readonly contextFallbackUsed?: boolean;
 };
 
 export type ToolTrace = {
@@ -332,10 +329,10 @@ async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Par
 
 async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
+  const selection = await selectAgentContext(state, ready);
   const reply = await ready.model.complete({
-    systemPrompt: systemPromptWithSummary(state.summary),
-    ...(state.summary.length === 0 ? {} : { fallbackSystemPrompt: supportSystemPrompt }),
-    messages: state.messages.slice(state.keptFrom),
+    systemPrompt: systemPromptWithSummary(selection.summary),
+    messages: state.messages.slice(selection.keptFrom),
   });
   throwIfAborted(ready.signal);
   const parsed = replySchema.safeParse(reply);
@@ -345,7 +342,8 @@ async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
 
   const toolCalls = parsed.data.toolCalls ?? [];
   return {
-    ...(parsed.data.contextFallbackUsed === true ? { summary: "" } : {}),
+    summary: selection.summary,
+    keptFrom: selection.keptFrom,
     messages: [
       {
         role: "assistant",
@@ -356,6 +354,35 @@ async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
     draft: parsed.data.text,
     pendingQueue: toolCalls,
   };
+}
+
+async function selectAgentContext(
+  state: TurnChannels,
+  ready: ReadyTurn,
+): Promise<{ summary: string; keptFrom: number }> {
+  const requestTokenCount = ready.model.requestTokenCount?.bind(ready.model);
+  const hardTokens = ready.contextHardTokens;
+  if (requestTokenCount === undefined || hardTokens === undefined ||
+      requestTokenCount({
+        systemPrompt: systemPromptWithSummary(state.summary),
+        messages: state.messages.slice(state.keptFrom),
+      }) <= hardTokens) {
+    return { summary: state.summary, keptFrom: state.keptFrom };
+  }
+  const compacted = await compactHistory({
+    systemPrompt: supportSystemPrompt,
+    messages: compactMessages(state),
+    runningSummary: null,
+    windowTokens: ready.contextWindowTokens,
+    hardTokens,
+    startRatio: 0,
+    requestTokenCount: (_summary, keptFrom) => requestTokenCount({
+      systemPrompt: supportSystemPrompt,
+      messages: state.messages.slice(keptFrom),
+    }),
+    summarize: async () => { throw new SupportTurnRejected("raw context fallback requested"); },
+  });
+  return { summary: "", keptFrom: compacted.keptFrom };
 }
 
 function routeAfterAgent(state: TurnChannels, ready: ReadyTurn): "tools" | typeof END {

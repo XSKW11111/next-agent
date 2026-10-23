@@ -32,26 +32,20 @@ test("the configured hard cap rejects protected content before sending a request
   expect(calls).toBe(0);
 });
 
-test("a summary that exceeds the exact request budget falls back to the base prompt", async () => {
-  let sent: unknown;
+test("the adapter refuses an oversized summary without silently omitting it", async () => {
   let calls = 0;
   const model = openRouterModel(
     { ...config, contextHardTokens: 900 },
-    async (_url, init) => {
+    async () => {
       calls += 1;
-      sent = JSON.parse(String(init?.body));
       return Response.json({ choices: [{ message: { content: "done" } }] });
     },
   );
-  const reply = await model.complete({
+  await expect(model.complete({
     systemPrompt: `Base instructions.\n\nConversation summary:\n${"memory ".repeat(800)}`,
-    fallbackSystemPrompt: "Base instructions.",
     messages: [{ role: "user", content: "hello" }],
-  });
-  expect(reply.text).toBe("done");
-  expect(reply.contextFallbackUsed).toBe(true);
-  expect(calls).toBe(1);
-  expect(sent).toMatchObject({ messages: [{ role: "system", content: "Base instructions." }, { role: "user", content: "hello" }] });
+  })).rejects.toBeInstanceOf(ContextBudgetExceeded);
+  expect(calls).toBe(0);
 });
 
 test("oversized summarization does not send a request", async () => {

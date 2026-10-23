@@ -13,7 +13,7 @@ import type { ProposalStore } from "../business/handoff/handoff";
 import type { CatalogOrder, OrderCatalog, OrderStreakStore } from "../business/order/lookup-order";
 import type { ProductSearchDependencies } from "../business/product/search-products";
 import type { EarlyRisersCodeStore } from "../business/promotion/claim-early-risers";
-import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "./support-turn";
+import { runSupportTurn, type ScriptedModel, type SupportMessage, type SupportTurnDependencies } from "./support-turn";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const otherThreadId = "99999999-9999-4999-8999-999999999999";
@@ -636,22 +636,35 @@ test("the summarize node keeps the current turn raw once history passes 70 perce
   expect(result.contextSummary).toEqual({ summary: "Earlier order facts.", coveredThrough: 1 });
 });
 
-test("a model context fallback never persists a summary it omitted", async () => {
+test("a later tool round reselects raw history before omitting an oversized summary", async () => {
   const oldTurn = Array.from({ length: 4000 }, (_item, index) => `fact${index}`).join(" ");
+  const seen: { systemPrompt: string; messages: readonly SupportMessage[] }[] = [];
   const model: ScriptedModel = {
     async summarize() { return "Earlier order facts."; },
-    async complete() { return { text: "Your order is shipped.", contextFallbackUsed: true }; },
+    requestTokenCount(input) {
+      return input.systemPrompt.includes("Earlier order facts.") && input.messages.some((message) => message.role === "tool")
+        ? 7_001 : 100;
+    },
+    async complete(input) {
+      seen.push(input);
+      if (input.messages.some((message) => message.role === "tool")) return { text: "Your order is shipped." };
+      return { text: "Checking.", toolCalls: [{ id: "lookup-1", name: "lookup_order", args: { email: "ada@example.com" } }] };
+    },
   };
   const result = await runSupportTurn({
     priorMessages: [{ role: "user", content: oldTurn }],
     priorSequences: [1],
     contextWindowTokens: 8_000,
+    contextHardTokens: 7_000,
     model,
     sessionId,
     customerText: "Where is order W002?",
     dependencies: dependencies(streakStore(0)),
   });
   expect(result.draft).toBe("Your order is shipped.");
+  expect(seen[0]?.systemPrompt).toContain("Earlier order facts.");
+  expect(seen[1]?.systemPrompt).not.toContain("Earlier order facts.");
+  expect(seen[1]?.messages[0]?.content).toContain("fact0");
   expect(result.contextSummary).toBeNull();
 });
 
