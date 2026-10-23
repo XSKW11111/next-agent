@@ -1,0 +1,8 @@
+node_modules
+.git
+.next
+coverage
+.env
+.env.local
+scripts/local-load/*.log
+scripts/local-load/*.jsonl

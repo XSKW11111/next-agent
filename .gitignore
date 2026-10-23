@@ -7,6 +7,9 @@ coverage/
 .env
 .env.local
 *.tsbuildinfo
+scripts/local-load/.data/
+scripts/local-load/*.log
+scripts/local-load/*.jsonl
 
 next-agent-system-architecture.md
 
