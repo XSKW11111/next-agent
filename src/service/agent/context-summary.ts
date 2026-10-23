@@ -5,6 +5,7 @@ const contextEncoder = getEncoding("cl100k_base");
 export const contextWindowTokens = 256_000;
 export const summaryStartRatio = 0.7;
 export const summaryReserveTokens = 20_000;
+export const defaultContextHardTokens = 120_000;
 
 export class ContextSummaryRejected extends Error {
   constructor() {
@@ -29,35 +30,37 @@ export type CompactHistoryInput = {
   readonly messages: readonly CompactMessage[];
   readonly runningSummary: RunningSummary | null;
   readonly windowTokens?: number;
+  readonly hardTokens?: number;
   readonly startRatio?: number;
   readonly summaryReserveTokens?: number;
   readonly tokenCounter?: (text: string) => number;
   readonly summarize: (prompt: string) => Promise<string>;
 };
 
-export type CompactHistoryResult = {
-  readonly summary: RunningSummary | null;
-  readonly keptFrom: number;
-};
+export type CompactHistoryResult =
+  | { readonly kind: "unchanged"; readonly summary: RunningSummary | null; readonly keptFrom: number }
+  | { readonly kind: "summarized"; readonly summary: RunningSummary; readonly keptFrom: number }
+  | { readonly kind: "raw_fallback"; readonly summary: RunningSummary | null; readonly keptFrom: number };
 
 export async function compactHistory(input: CompactHistoryInput): Promise<CompactHistoryResult> {
   const windowTokens = input.windowTokens ?? contextWindowTokens;
   const startRatio = input.startRatio ?? summaryStartRatio;
   const reserveTokens = input.summaryReserveTokens ?? summaryReserveTokens;
+  const hardTokens = input.hardTokens ?? Math.min(windowTokens, defaultContextHardTokens);
   const counter = input.tokenCounter ?? tokenCount;
-  const startTokens = Math.floor(windowTokens * startRatio);
+  const startTokens = Math.min(Math.floor(windowTokens * startRatio), hardTokens);
   const systemTokens = counter(input.systemPrompt);
   const messageTokens = countMessages(input.messages, counter);
   const summaryTokens = input.runningSummary === null ? 0 : counter(input.runningSummary.summary);
   if (systemTokens + summaryTokens + messageTokens <= startTokens) {
-    return { summary: input.runningSummary, keptFrom: 0 };
+    return { kind: "unchanged", summary: input.runningSummary, keptFrom: 0 };
   }
 
   const rawBudget = startTokens - systemTokens;
   const lastUser = lastUserIndex(input.messages);
   let keptFrom = lastUser;
   if (countMessages(input.messages.slice(keptFrom), counter) > rawBudget) {
-    throw new ContextSummaryRejected();
+    return rawFallback(input, counter, hardTokens);
   }
   while (
     keptFrom > 0 &&
@@ -66,28 +69,71 @@ export async function compactHistory(input: CompactHistoryInput): Promise<Compac
     keptFrom -= 1;
   }
   if (keptFrom === 0) {
-    return { summary: input.runningSummary, keptFrom: 0 };
+    if (systemTokens + summaryTokens + messageTokens <= hardTokens) {
+      return { kind: "unchanged", summary: input.runningSummary, keptFrom: 0 };
+    }
+    return rawFallback(input, counter, hardTokens);
   }
 
   const covered = new Set(input.runningSummary?.summarizedIds ?? []);
   const prefix = input.messages.slice(0, keptFrom).filter((message) => !covered.has(message.id));
   if (prefix.length === 0) {
-    return { summary: input.runningSummary, keptFrom };
+    if (
+      systemTokens + summaryTokens + countMessages(input.messages.slice(keptFrom), counter) <= hardTokens
+    ) {
+      return { kind: "unchanged", summary: input.runningSummary, keptFrom };
+    }
+    return rawFallback(input, counter, hardTokens);
   }
 
-  const summary = await input.summarize(
-    summaryPrompt(transcript(prefix), input.runningSummary?.summary ?? null),
-  );
-  if (counter(summary) > reserveTokens) {
-    throw new ContextSummaryRejected();
+  let summary: string;
+  try {
+    summary = await input.summarize(
+      summaryPrompt(transcript(prefix), input.runningSummary?.summary ?? null),
+    );
+  } catch {
+    return rawFallback(input, counter, hardTokens);
+  }
+  if (
+    summary.trim().length === 0 ||
+    counter(summary) > reserveTokens ||
+    systemTokens + counter(summary) + countMessages(input.messages.slice(keptFrom), counter) > hardTokens
+  ) {
+    return rawFallback(input, counter, hardTokens);
   }
   return {
+    kind: "summarized",
     summary: {
       summary,
       summarizedIds: [...covered, ...prefix.map((message) => message.id)],
     },
     keptFrom,
   };
+}
+
+function rawFallback(
+  input: CompactHistoryInput,
+  counter: (text: string) => number,
+  hardTokens: number,
+): CompactHistoryResult {
+  const protectedFrom = lastUserIndex(input.messages);
+  const systemTokens = counter(input.systemPrompt);
+  const protectedTokens = countMessages(input.messages.slice(protectedFrom), counter);
+  if (systemTokens + protectedTokens > hardTokens) {
+    throw new ContextSummaryRejected();
+  }
+
+  const existingSummary = input.runningSummary;
+  const summary = existingSummary !== null &&
+    systemTokens + counter(existingSummary.summary) + protectedTokens <= hardTokens
+    ? existingSummary
+    : null;
+  const budget = hardTokens - systemTokens - (summary === null ? 0 : counter(summary.summary));
+  let keptFrom = protectedFrom;
+  while (keptFrom > 0 && countMessages(input.messages.slice(keptFrom - 1), counter) <= budget) {
+    keptFrom -= 1;
+  }
+  return { kind: "raw_fallback", summary, keptFrom };
 }
 
 export function tokenCount(text: string): number {

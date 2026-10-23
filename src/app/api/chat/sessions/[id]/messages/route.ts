@@ -44,6 +44,8 @@ export async function POST(
     text: turn.value.text,
     messages: runtime.messages,
     model: runtime.model,
+    contextWindowTokens: runtime.config.contextWindowTokens,
+    contextHardTokens: runtime.config.contextHardTokens,
     maxToolRounds: runtime.maxToolRounds ?? runtime.config.maxToolRounds,
     ...(runtime.productMatchThreshold === undefined
       ? {}

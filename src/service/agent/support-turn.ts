@@ -117,6 +117,7 @@ export type SupportTurnInput = {
   readonly priorSummary?: string | null;
   readonly priorSequences?: readonly number[];
   readonly contextWindowTokens?: number;
+  readonly contextHardTokens?: number;
   readonly dependencies: SupportTurnDependencies;
   readonly threadId?: string;
   readonly signal?: AbortSignal;
@@ -203,6 +204,7 @@ type ReadyTurn = {
   readonly productMatchThreshold: number | undefined;
   readonly maxProductCandidates: number | undefined;
   readonly contextWindowTokens: number;
+  readonly contextHardTokens: number | undefined;
   readonly dependencies: SupportTurnDependencies;
 };
 
@@ -236,6 +238,7 @@ export async function runSupportTurn(input: SupportTurnInput): Promise<TurnCompl
     productMatchThreshold: input.productMatchThreshold,
     maxProductCandidates: input.maxProductCandidates,
     contextWindowTokens: input.contextWindowTokens ?? contextWindowTokens,
+    contextHardTokens: input.contextHardTokens,
     dependencies: input.dependencies,
   });
   const seeded = [...seedSupportMessages(input.priorMessages, customerText)];
@@ -304,6 +307,7 @@ async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Par
     messages: compactMessages(state),
     runningSummary: runningSummary(state.summary),
     windowTokens: ready.contextWindowTokens,
+    ...(ready.contextHardTokens === undefined ? {} : { hardTokens: ready.contextHardTokens }),
     summarize: summarize ?? (async () => {
       throw new SupportTurnRejected("summary model is unavailable");
     }),

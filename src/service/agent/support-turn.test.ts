@@ -636,6 +636,44 @@ test("the summarize node keeps the current turn raw once history passes 70 perce
   expect(result.contextSummary).toEqual({ summary: "Earlier order facts.", coveredThrough: 1 });
 });
 
+test("a summary provider failure still answers with bounded raw history and stores no summary", async () => {
+  const seen: { systemPrompt: string; messages: readonly { role: string; content: string }[] }[] = [];
+  const oldTurn = Array.from({ length: 4000 }, (_item, index) => `fact${index}`).join(" ");
+  const model: ScriptedModel = {
+    async summarize() {
+      throw new Error("summary provider unavailable");
+    },
+    async complete(input) {
+      seen.push({
+        systemPrompt: input.systemPrompt,
+        messages: input.messages.map((message) => ({ role: message.role, content: message.content })),
+      });
+      return { text: "Your order is shipped." };
+    },
+  };
+
+  const result = await runSupportTurn({
+    priorMessages: [
+      { role: "user", content: oldTurn },
+      { role: "assistant", content: "Noted.", toolCalls: [] },
+    ],
+    priorSequences: [1, 2],
+    contextWindowTokens: 8_000,
+    contextHardTokens: 7_000,
+    priorSummary: null,
+    model,
+    sessionId,
+    customerText: "Where is order W002?",
+    dependencies: dependencies(streakStore(0)),
+  });
+
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.messages.at(-1)?.content).toBe("Where is order W002?");
+  expect(seen[0]?.systemPrompt).not.toContain("summary provider unavailable");
+  expect(result.draft).toBe("Your order is shipped.");
+  expect(result.contextSummary).toBeNull();
+});
+
 const listedProduct = {
   kind: "products_found",
   filtersApplied: {},

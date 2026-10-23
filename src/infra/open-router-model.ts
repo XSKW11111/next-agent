@@ -1,7 +1,6 @@
 import { getEncoding } from "js-tiktoken";
 import { z } from "zod";
 import type { AgentConfig } from "./agent-config";
-import { contextWindowTokens } from "@/service/agent/context-summary";
 import type { ScriptedModel, ScriptedReply, SupportMessage } from "@/service/agent/support-turn";
 
 // cl100k_base is our count. DeepSeek's tokenizer can disagree, and the hard budget stays below the window so that gap is slack.
@@ -144,7 +143,7 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       const messages = fitContext(
         toChatMessages(input.systemPrompt, input.messages),
         tools,
-        contextWindowTokens,
+        config.contextHardTokens,
       );
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
