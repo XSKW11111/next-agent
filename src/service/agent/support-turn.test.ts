@@ -636,6 +636,25 @@ test("the summarize node keeps the current turn raw once history passes 70 perce
   expect(result.contextSummary).toEqual({ summary: "Earlier order facts.", coveredThrough: 1 });
 });
 
+test("a model context fallback never persists a summary it omitted", async () => {
+  const oldTurn = Array.from({ length: 4000 }, (_item, index) => `fact${index}`).join(" ");
+  const model: ScriptedModel = {
+    async summarize() { return "Earlier order facts."; },
+    async complete() { return { text: "Your order is shipped.", contextFallbackUsed: true }; },
+  };
+  const result = await runSupportTurn({
+    priorMessages: [{ role: "user", content: oldTurn }],
+    priorSequences: [1],
+    contextWindowTokens: 8_000,
+    model,
+    sessionId,
+    customerText: "Where is order W002?",
+    dependencies: dependencies(streakStore(0)),
+  });
+  expect(result.draft).toBe("Your order is shipped.");
+  expect(result.contextSummary).toBeNull();
+});
+
 test("a summary provider failure still answers with bounded raw history and stores no summary", async () => {
   const seen: { systemPrompt: string; messages: readonly { role: string; content: string }[] }[] = [];
   const oldTurn = Array.from({ length: 4000 }, (_item, index) => `fact${index}`).join(" ");

@@ -43,6 +43,7 @@ const toolCallSchema = z.strictObject({
 const replySchema = z.strictObject({
   text: z.string(),
   toolCalls: z.array(toolCallSchema).optional(),
+  contextFallbackUsed: z.boolean().optional(),
 });
 
 const customerTextSchema = z.string().trim().min(1);
@@ -77,11 +78,13 @@ export type ScriptedModel = {
     readonly messages: readonly SupportMessage[];
   }): ScriptedReply | Promise<ScriptedReply>;
   summarize?(prompt: string): Promise<string>;
+  requestTokenCount?(input: { readonly systemPrompt: string; readonly messages: readonly SupportMessage[] }): number;
 };
 
 export type ScriptedReply = {
   readonly text: string;
   readonly toolCalls?: readonly ModelToolCall[];
+  readonly contextFallbackUsed?: boolean;
 };
 
 export type ToolTrace = {
@@ -303,12 +306,19 @@ function compileSupportGraph(ready: ReadyTurn) {
 async function summarizeNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial<TurnChannels>> {
   throwIfAborted(ready.signal);
   const summarize = ready.model.summarize?.bind(ready.model);
+  const requestTokenCount = ready.model.requestTokenCount?.bind(ready.model);
   const compacted = await compactHistory({
     systemPrompt: supportSystemPrompt,
     messages: compactMessages(state),
     runningSummary: runningSummary(state.summary),
     windowTokens: ready.contextWindowTokens,
     ...(ready.contextHardTokens === undefined ? {} : { hardTokens: ready.contextHardTokens }),
+    ...(requestTokenCount === undefined ? {} : {
+      requestTokenCount: (summary: RunningSummary | null, keptFrom: number) => requestTokenCount({
+        systemPrompt: systemPromptWithSummary(summary?.summary ?? ""),
+        messages: state.messages.slice(keptFrom),
+      }),
+    }),
     summarize: summarize ?? (async () => {
       throw new SupportTurnRejected("summary model is unavailable");
     }),
@@ -335,6 +345,7 @@ async function agentNode(state: TurnChannels, ready: ReadyTurn): Promise<Partial
 
   const toolCalls = parsed.data.toolCalls ?? [];
   return {
+    ...(parsed.data.contextFallbackUsed === true ? { summary: "" } : {}),
     messages: [
       {
         role: "assistant",

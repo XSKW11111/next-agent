@@ -120,6 +120,9 @@ export class ContextBudgetExceeded extends Error {
 
 export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): ScriptedModel {
   return {
+    requestTokenCount(input) {
+      return tokenCount({ messages: toChatMessages(input.systemPrompt, input.messages), tools });
+    },
     async summarize(prompt) {
       const messages = fitContext(
         [{ role: "system", content: "Summarize conversation context." }, { role: "user", content: prompt }],
@@ -146,11 +149,13 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
     },
     async complete(input) {
       let messages: ChatMessage[];
+      let contextFallbackUsed = false;
       try {
         messages = fitContext(toChatMessages(input.systemPrompt, input.messages), tools, config.contextHardTokens);
       } catch (error) {
         if (!(error instanceof ContextBudgetExceeded) || input.fallbackSystemPrompt === undefined) throw error;
         messages = fitContext(toChatMessages(input.fallbackSystemPrompt, input.messages), tools, config.contextHardTokens);
+        contextFallbackUsed = true;
       }
       const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
@@ -167,7 +172,8 @@ export function openRouterModel(config: AgentConfig, fetchImpl: typeof fetch): S
       if (!response.ok) {
         throw await failedResponse(response, config.debugToolDetails);
       }
-      return readReply(response, config.debugToolDetails);
+      const reply = await readReply(response, config.debugToolDetails);
+      return contextFallbackUsed ? { ...reply, contextFallbackUsed } : reply;
     },
   };
 }
@@ -185,46 +191,11 @@ function fitContext(
   if (system?.role !== "system") {
     throw new Error("context fit requires a system message");
   }
-  const protectedStart = lastUserIndex(messages);
-  let prefix = messages.slice(1, protectedStart);
-  const suffix = messages.slice(protectedStart);
-  while (
-    prefix.length > 0 &&
-    tokenCount({ messages: [system, ...prefix, ...suffix], tools }) > hardTokens
-  ) {
-    prefix = prefix.slice(prefixDropCount(prefix));
-  }
-  const fitted = [system, ...prefix, ...suffix];
+  const fitted = [...messages];
   if (tokenCount({ messages: fitted, tools }) > hardTokens) {
     throw new ContextBudgetExceeded();
   }
   return fitted;
-}
-
-function lastUserIndex(messages: readonly ChatMessage[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") return index;
-  }
-  return 1;
-}
-
-function prefixDropCount(prefix: readonly ChatMessage[]): 1 | 2 {
-  const first = prefix[0];
-  const second = prefix[1];
-  if (first === undefined) return 1;
-  switch (first.role) {
-    case "user":
-      return second?.role === "assistant" ? 2 : 1;
-    case "system":
-    case "assistant":
-    case "tool":
-      return 1;
-    default: {
-      const unexpected: never = first;
-      return unexpected;
-    }
-  }
 }
 
 function toChatMessages(systemPrompt: string, messages: readonly SupportMessage[]): ChatMessage[] {

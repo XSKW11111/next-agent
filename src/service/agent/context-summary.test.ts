@@ -23,6 +23,22 @@ test("a transcript under 70 percent stays raw and does not call the summarizer",
   expect(result).toEqual({ kind: "unchanged", summary: null, keptFrom: 0 });
 });
 
+test("exact request overhead triggers compaction before raw history is silently omitted", async () => {
+  let calls = 0;
+  const result = await compactHistory({
+    systemPrompt: "sys",
+    messages: [message("old", "user", "a".repeat(20)), message("current", "user", "new")],
+    runningSummary: null,
+    windowTokens: 100,
+    hardTokens: 70,
+    tokenCounter: byLength,
+    requestTokenCount: (summary, keptFrom) => keptFrom === 0 ? 100 : 30 + (summary?.summary.length ?? 0),
+    summarize: async () => { calls += 1; return "SUM"; },
+  });
+  expect(calls).toBe(1);
+  expect(result).toEqual({ kind: "summarized", summary: { summary: "SUM", summarizedIds: ["old"] }, keptFrom: 1 });
+});
+
 test("overflow from the oldest is summarized once and the newest user message stays raw", async () => {
   const seen: string[] = [];
   const messages: CompactMessage[] = [

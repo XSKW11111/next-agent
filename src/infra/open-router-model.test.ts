@@ -49,6 +49,7 @@ test("a summary that exceeds the exact request budget falls back to the base pro
     messages: [{ role: "user", content: "hello" }],
   });
   expect(reply.text).toBe("done");
+  expect(reply.contextFallbackUsed).toBe(true);
   expect(calls).toBe(1);
   expect(sent).toMatchObject({ messages: [{ role: "system", content: "Base instructions." }, { role: "user", content: "hello" }] });
 });

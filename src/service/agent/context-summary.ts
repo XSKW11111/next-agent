@@ -34,6 +34,7 @@ export type CompactHistoryInput = {
   readonly startRatio?: number;
   readonly summaryReserveTokens?: number;
   readonly tokenCounter?: (text: string) => number;
+  readonly requestTokenCount?: (summary: RunningSummary | null, keptFrom: number) => number;
   readonly summarize: (prompt: string) => Promise<string>;
 };
 
@@ -52,7 +53,7 @@ export async function compactHistory(input: CompactHistoryInput): Promise<Compac
   const systemTokens = counter(input.systemPrompt);
   const messageTokens = countMessages(input.messages, counter);
   const summaryTokens = input.runningSummary === null ? 0 : counter(input.runningSummary.summary);
-  if (systemTokens + summaryTokens + messageTokens <= startTokens) {
+  if (systemTokens + summaryTokens + messageTokens <= startTokens && fitsHard(input, input.runningSummary, 0, counter, hardTokens)) {
     return { kind: "unchanged", summary: input.runningSummary, keptFrom: 0 };
   }
 
@@ -64,12 +65,13 @@ export async function compactHistory(input: CompactHistoryInput): Promise<Compac
   }
   while (
     keptFrom > 0 &&
-    countMessages(input.messages.slice(keptFrom - 1), counter) <= rawBudget
+    countMessages(input.messages.slice(keptFrom - 1), counter) <= rawBudget &&
+    fitsHard(input, input.runningSummary, keptFrom - 1, counter, hardTokens)
   ) {
     keptFrom -= 1;
   }
   if (keptFrom === 0) {
-    if (systemTokens + summaryTokens + messageTokens <= hardTokens) {
+    if (fitsHard(input, input.runningSummary, 0, counter, hardTokens)) {
       return { kind: "unchanged", summary: input.runningSummary, keptFrom: 0 };
     }
     return rawFallback(input, counter, hardTokens);
@@ -79,7 +81,7 @@ export async function compactHistory(input: CompactHistoryInput): Promise<Compac
   const prefix = input.messages.slice(0, keptFrom).filter((message) => !covered.has(message.id));
   if (prefix.length === 0) {
     if (
-      systemTokens + summaryTokens + countMessages(input.messages.slice(keptFrom), counter) <= hardTokens
+      fitsHard(input, input.runningSummary, keptFrom, counter, hardTokens)
     ) {
       return { kind: "unchanged", summary: input.runningSummary, keptFrom };
     }
@@ -97,7 +99,7 @@ export async function compactHistory(input: CompactHistoryInput): Promise<Compac
   if (
     summary.trim().length === 0 ||
     counter(summary) > reserveTokens ||
-    systemTokens + counter(summary) + countMessages(input.messages.slice(keptFrom), counter) > hardTokens
+    !fitsHard(input, { summary, summarizedIds: [] }, keptFrom, counter, hardTokens)
   ) {
     return rawFallback(input, counter, hardTokens);
   }
@@ -117,23 +119,34 @@ function rawFallback(
   hardTokens: number,
 ): CompactHistoryResult {
   const protectedFrom = lastUserIndex(input.messages);
-  const systemTokens = counter(input.systemPrompt);
-  const protectedTokens = countMessages(input.messages.slice(protectedFrom), counter);
-  if (systemTokens + protectedTokens > hardTokens) {
+  if (!fitsHard(input, null, protectedFrom, counter, hardTokens)) {
     throw new ContextSummaryRejected();
   }
 
   const existingSummary = input.runningSummary;
   const summary = existingSummary !== null &&
-    systemTokens + counter(existingSummary.summary) + protectedTokens <= hardTokens
+    fitsHard(input, existingSummary, protectedFrom, counter, hardTokens)
     ? existingSummary
     : null;
-  const budget = hardTokens - systemTokens - (summary === null ? 0 : counter(summary.summary));
   let keptFrom = protectedFrom;
-  while (keptFrom > 0 && countMessages(input.messages.slice(keptFrom - 1), counter) <= budget) {
+  while (keptFrom > 0 && fitsHard(input, summary, keptFrom - 1, counter, hardTokens)) {
     keptFrom -= 1;
   }
   return { kind: "raw_fallback", summary, keptFrom };
+}
+
+function fitsHard(
+  input: CompactHistoryInput,
+  summary: RunningSummary | null,
+  keptFrom: number,
+  counter: (text: string) => number,
+  hardTokens: number,
+): boolean {
+  const tokens = input.requestTokenCount?.(summary, keptFrom) ??
+    counter(input.systemPrompt) +
+    (summary === null ? 0 : counter(summary.summary)) +
+    countMessages(input.messages.slice(keptFrom), counter);
+  return tokens <= hardTokens;
 }
 
 export function tokenCount(text: string): number {
