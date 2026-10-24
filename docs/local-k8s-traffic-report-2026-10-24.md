@@ -20,6 +20,35 @@ The peak window contained 252 successful responses from `08:44:49.370` through `
 
 The fixed, nonoverlapping seconds from the client start had completion counts of 86, 183, 234, 218, 213, and 66. The peak of 252 uses a *sliding* one-second window, so it differs from the largest fixed-second bucket (234). It is a burst count, not a sustained throughput measurement.
 
+## Route through Kubernetes instances
+
+```mermaid
+flowchart LR
+    J[agent-load Job pod<br/>64 concurrent clients] --> S[agent Service<br/>ClusterIP:3002]
+    S --> A[agent-7ccc4dbcb7-dqn2b<br/>10.244.0.35 · 502 requests]
+    S --> B[agent-7ccc4dbcb7-qrw52<br/>10.244.0.36 · 498 requests]
+    A --> RS[redis Service]
+    A --> SS[sqlite Service]
+    B --> RS
+    B --> SS
+    RS --> R[one Redis pod]
+    SS --> DB[one SQLite pod]
+```
+
+The load Job sent requests to `http://agent:3002/turn`, the agent Service selected one of two ready agent pod endpoints, and each agent used the Redis and SQLite Services. The pod names and IPs above are from the captured Kubernetes resource snapshot; pod IPs are temporary. The traces prove which pod processed each request. They do not expose the Service's connection-selection decision or prove per-request round-robin routing. HTTP connection reuse can make multiple requests use the same selected endpoint.
+
+| Client elapsed second | Pod `dqn2b` | Pod `qrw52` | Total |
+| --- | ---: | ---: | ---: |
+| 0–1 | 39 | 47 | 86 |
+| 1–2 | 83 | 100 | 183 |
+| 2–3 | 119 | 115 | 234 |
+| 3–4 | 109 | 109 | 218 |
+| 4–5 | 114 | 99 | 213 |
+| 5–6 | 38 | 28 | 66 |
+| **Entire run** | **502 (50.2%)** | **498 (49.8%)** | **1,000** |
+
+The retained `request-routes.csv` joins every traffic record to its agent trace by request ID. It lists completion time, handling pod and IP, HTTP status, latency, cache outcome, estimated tokens, and model/Redis/SQLite call counts. For example, request `b31b6084-338a-4f16-9cd8-cc3281930e9d` completed on pod `qrw52` at `08:44:48.307` UTC. The CSV and `routing-timeline.png` are generated artifacts stored beside the raw logs, outside Git.
+
 ## Trace coverage and timings
 
 The client wrote one `local_load.traffic` JSON record per attempt. Each agent wrote a `local_load.agent_trace` record with the same trace ID, pod ID, outcome, token estimate, and bounded named spans. Reconciliation found **1,000 unique traffic IDs and 1,000 unique agent trace IDs**, with no missing, duplicate, unpaired, token-mismatched, or outcome-mismatched records. Both agent pods had zero container restarts in the captured Kubernetes snapshot; the load Job succeeded.
