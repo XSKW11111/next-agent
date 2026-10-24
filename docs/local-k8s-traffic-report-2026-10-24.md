@@ -35,7 +35,7 @@ flowchart LR
     SS --> DB[one SQLite pod]
 ```
 
-The load Job sent requests to `http://agent:3002/turn`, the agent Service selected one of two ready agent pod endpoints, and each agent used the Redis and SQLite Services. The pod names and IPs above are from the captured Kubernetes resource snapshot; pod IPs are temporary. The traces prove which pod processed each request. They do not expose the Service's connection-selection decision or prove per-request round-robin routing. HTTP connection reuse can make multiple requests use the same selected endpoint.
+The load Job sent requests to `http://agent:3002/turn`, the agent Service selected one of two ready agent pod endpoints, and each agent used the Redis and SQLite Services. All five pods ran on the single `rolling-lab-control-plane` kind node, so this verifies routing across pod instances, not across Kubernetes nodes. The pod names and IPs above are from the captured Kubernetes resource snapshot; pod IPs are temporary. The traces prove which pod processed each request. They do not expose the Service's connection-selection decision or prove per-request round-robin routing. HTTP connection reuse can make multiple requests use the same selected endpoint.
 
 | Client elapsed second | Pod `dqn2b` | Pod `qrw52` | Total |
 | --- | ---: | ---: | ---: |
