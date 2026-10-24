@@ -8,7 +8,7 @@
  *
  *   LIVE_EVAL_MODE=in-process npx tsx scripts/live-eval.ts
  */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { debugChatRuntime } from "../src/infra/debug-runtime.ts";
 import { debugOrderCatalog } from "../src/infra/debug-catalog.ts";
 import { projectSupportTurnTraceView } from "../src/service/trace/project-support-turn-trace-view.ts";
@@ -41,13 +41,14 @@ async function httpAsk(context: {
     body: JSON.stringify({ timezone: "Asia/Shanghai" }),
   });
   const session = (await created.json()) as { id?: string };
-  if (session.id === undefined) throw new Error("session create failed");
+  const ownerCookie = created.headers.get("set-cookie")?.split(";")[0];
+  if (session.id === undefined || ownerCookie === undefined) throw new Error("session create failed");
   const replies: string[] = [];
   const traces: LiveTrialTrace[] = [];
   for (const text of context.turns) {
     const response = await fetch(`${baseUrl}/api/chat/sessions/${session.id}/messages`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ turnId: crypto.randomUUID(), text }),
     });
     replies.push(textFrom(await response.text()));
@@ -74,7 +75,7 @@ async function inProcessAsk(context: {
     ...(orderCase === undefined ? {} : { orderCatalog: debugOrderCatalog(orderCase) }),
   });
   const session = sessionForVariant(context.variant, runtime.newSessionId());
-  await runtime.sessions.save(session);
+  await runtime.sessions.save(session, randomBytes(32).toString("hex"));
 
   const replies: string[] = [];
   const traces: LiveTrialTrace[] = [];
