@@ -3,6 +3,7 @@ import { orderNumberSchema } from "../../src/domain/order";
 import type { SessionId } from "../../src/domain/session";
 import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "../../src/service/agent/support-turn";
 import { redisCommand } from "./redis-client";
+import type { TurnTrace } from "./turn-trace";
 
 const sqliteUrl = process.env.SQLITE_URL ?? "http://sqlite:3001";
 const redisHost = process.env.REDIS_HOST ?? "redis";
@@ -18,6 +19,8 @@ export type TurnReply = {
   readonly turnId: SessionId;
   readonly reply: string;
   readonly cacheOutcome: CacheOutcome;
+  readonly traceId: string;
+  readonly estimatedTokens: { readonly input: number; readonly output: number };
 };
 
 async function sqlite(path: string, method: string, value?: unknown): Promise<unknown> {
@@ -40,7 +43,7 @@ const model: ScriptedModel = {
   },
 };
 
-function dependencies(id: SessionId, recordCache: (outcome: CacheOutcome) => void): SupportTurnDependencies {
+function dependencies(id: SessionId, trace: TurnTrace, recordCache: (outcome: CacheOutcome) => void): SupportTurnDependencies {
   return {
     orders: {
       catalog: {
@@ -49,7 +52,7 @@ function dependencies(id: SessionId, recordCache: (outcome: CacheOutcome) => voi
           let cached: string | null;
           let cacheAvailable = true;
           try {
-            cached = await redisCommand(redisHost, redisPort, "GET", cacheKey);
+            cached = await trace.span("redis.get", () => redisCommand(redisHost, redisPort, "GET", cacheKey));
           } catch {
             recordCache("unavailable");
             cached = null;
@@ -57,7 +60,7 @@ function dependencies(id: SessionId, recordCache: (outcome: CacheOutcome) => voi
           }
           if (cached === null && cacheAvailable) {
             try {
-              await redisCommand(redisHost, redisPort, "SET", cacheKey, orderFixture, "EX", "600");
+              await trace.span("redis.set", () => redisCommand(redisHost, redisPort, "SET", cacheKey, orderFixture, "EX", "600"));
               recordCache("miss");
             } catch {
               recordCache("unavailable");
@@ -74,14 +77,14 @@ function dependencies(id: SessionId, recordCache: (outcome: CacheOutcome) => voi
       },
       streaks: {
         async read() {
-          const raw = await sqlite("/sessions", "POST", { id });
+          const raw = await trace.span("sqlite.sessions", () => sqlite("/sessions", "POST", { id }));
           if (typeof raw !== "object" || raw === null || !("streak" in raw) || raw.streak !== 0) {
             return { kind: "unavailable" };
           }
           return { kind: "ready", streak: 0 };
         },
         async write(_sessionId, streak) {
-          await sqlite("/streak", "PUT", { id, streak });
+          await trace.span("sqlite.streak", () => sqlite("/streak", "PUT", { id, streak }));
           return { kind: "ready" };
         },
       },
@@ -113,14 +116,21 @@ function dependencies(id: SessionId, recordCache: (outcome: CacheOutcome) => voi
   };
 }
 
-export async function runSimulatedTurn(id: SessionId): Promise<TurnReply> {
+export async function runSimulatedTurn(id: SessionId, trace: TurnTrace): Promise<TurnReply> {
   let cacheOutcome: CacheOutcome = "unavailable";
+  const tracedModel: ScriptedModel = {
+    async complete(input) {
+      const output = await trace.span("model.complete", async () => model.complete(input));
+      trace.countModelCall(input, output);
+      return output;
+    },
+  };
   const result = await runSupportTurn({
-    model,
+    model: tracedModel,
     sessionId: id,
     customerText,
     priorMessages: [],
-    dependencies: dependencies(id, (outcome) => { cacheOutcome = outcome; }),
+    dependencies: dependencies(id, trace, (outcome) => { cacheOutcome = outcome; }),
   });
   if (result.draft !== expectedReply || result.toolTraces.length !== 1 || result.toolTraces[0]?.tool !== "lookup_order") {
     throw new Error("agent result did not match the expected order lookup");
@@ -129,6 +139,8 @@ export async function runSimulatedTurn(id: SessionId): Promise<TurnReply> {
   if (typeof lookup !== "object" || lookup === null || !("kind" in lookup) || lookup.kind !== "orders_found") {
     throw new Error(`order lookup failed: ${JSON.stringify(lookup)}`);
   }
-  await sqlite("/messages", "POST", { sessionId: id, turnId: id, customerText, reply: result.draft });
-  return { sessionId: id, turnId: id, reply: result.draft, cacheOutcome };
+  await trace.span("sqlite.messages", () => sqlite("/messages", "POST", { sessionId: id, turnId: id, customerText, reply: result.draft }));
+  const estimatedTokens = trace.snapshot("ok").estimatedTokens;
+  return { sessionId: id, turnId: id, reply: result.draft, cacheOutcome, traceId: id,
+    estimatedTokens: { input: estimatedTokens.input, output: estimatedTokens.output } };
 }
