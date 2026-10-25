@@ -104,7 +104,7 @@ function dependencies(id: SessionId, trace: TurnTrace, recordCache: (outcome: Ca
         promotionCodes.set(identity, issued);
         return issued;
       } },
-      issueCode: () => "EARLY-LOCAL",
+      issueCode: () => "EARLY-LOCAL123",
     },
     handoff: {
       turnId: id,

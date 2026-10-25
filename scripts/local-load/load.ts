@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { CacheOutcome } from "./agent-turn";
 import { peakCompletionWindow, type Completion } from "./load-metrics";
+import { countWrongReadbackRows } from "./readback";
 import { scenarioForIndex, scenarioNames, type Intent } from "./scenarios";
 
 const requested = Number(process.env.LOAD_TURNS ?? "1000");
@@ -111,13 +112,8 @@ for (const ids of Array.from(expectations.keys()).reduce<string[][]>((batches, i
     headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }), signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`SQLite readback returned ${response.status}`);
   const records: unknown = await response.json();
-  if (!Array.isArray(records) || records.length !== ids.length) throw new Error("SQLite readback count mismatch");
-  for (const row of records) {
-    if (typeof row !== "object" || row === null || !("id" in row) || typeof row.id !== "string") { wrongReplies++; continue; }
-    const expected = expectations.get(row.id);
-    if (expected === undefined || !("customerText" in row) || row.customerText !== expected.customerText ||
-        !("reply" in row) || row.reply !== expected.reply) wrongReplies++;
-  }
+  if (!Array.isArray(records)) throw new Error("SQLite readback is not an array");
+  wrongReplies += countWrongReadbackRows(ids, records, expectations);
 }
 const sorted = [...durations].sort((a, b) => a - b);
 function percentile(fraction: number): number | null {

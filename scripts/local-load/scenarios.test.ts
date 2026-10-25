@@ -18,3 +18,11 @@ test("each intent checks its own tool payload and answer", () => {
     expect(validateScenarioResult(scenario, scenario.tool, "service_unavailable", scenario.payload, scenario.reply)).toBe(false);
   }
 });
+
+test("promotion rejects a tool payload with a code outside the domain format", () => {
+  const scenario = scenarioForIndex(2);
+  expect(validateScenarioResult(scenario, scenario.tool, scenario.resultKind,
+    { kind: "promotion_eligible", campaign: "Early Risers", code: "EARLY-LOCAL",
+      discountPercent: 10, validOn: "2026-10-08", expiresAt: "2026-10-09T00:00:00+08:00", timezone: "Asia/Shanghai" },
+    scenario.reply)).toBe(false);
+});

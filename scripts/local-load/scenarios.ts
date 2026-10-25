@@ -1,4 +1,5 @@
 import type { ToolName } from "../../src/service/tool/run-tool-round";
+import { parsePromotionResult } from "../../src/domain/promotion";
 
 export const scenarioNames = ["order_status", "product_search", "promotion_claim", "human_handoff"] as const;
 export type Intent = typeof scenarioNames[number];
@@ -25,9 +26,10 @@ const scenarios: readonly Scenario[] = [
     resultKind: "products_found", payload: { kind: "products_found", mode: "semantic", matchQuality: "strong", products: [{ name: "Camp Mug", stockLevel: 4 }] },
   },
   {
-    intent: "promotion_claim", customerText: "Please claim the Early Risers discount.", reply: "Your Early Risers code is EARLY-LOCAL for 10% off.",
+    intent: "promotion_claim", customerText: "Please claim the Early Risers discount.", reply: "Your Early Risers code is EARLY-LOCAL123 for 10% off.",
     tool: "claim_early_risers", args: { request: "claim" },
-    resultKind: "promotion_eligible", payload: { kind: "promotion_eligible", campaign: "Early Risers", code: "EARLY-LOCAL", discountPercent: 10, timezone: "Asia/Shanghai" },
+    resultKind: "promotion_eligible", payload: { kind: "promotion_eligible", campaign: "Early Risers", code: "EARLY-LOCAL123", discountPercent: 10,
+      validOn: "2026-10-08", expiresAt: "2026-10-09T00:00:00+08:00", timezone: "Asia/Shanghai" },
   },
   {
     intent: "human_handoff", customerText: "Please connect me to a person at ada@example.com.", reply: "I can hand this to a person. Confirm or Cancel.",
@@ -54,7 +56,9 @@ export function scenarioForIntent(intent: Intent): Scenario {
 }
 
 export function validateScenarioResult(scenario: Scenario, tool: ToolName, kind: unknown, payload: unknown, reply: unknown): boolean {
-  return tool === scenario.tool && kind === scenario.resultKind && reply === scenario.reply && containsFields(payload, scenario.payload);
+  return tool === scenario.tool && kind === scenario.resultKind && reply === scenario.reply &&
+    containsFields(payload, scenario.payload) &&
+    (scenario.intent !== "promotion_claim" || parsePromotionResult(payload).ok);
 }
 
 function containsFields(actual: unknown, expected: unknown): boolean {
