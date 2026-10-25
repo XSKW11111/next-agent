@@ -2,6 +2,8 @@ import { createServer } from "node:http";
 import { parse } from "../../src/domain/parse";
 import { sessionIdSchema } from "../../src/domain/session";
 import { runSimulatedTurn } from "./agent-turn";
+import { createTurnTrace, type TurnTrace } from "./turn-trace";
+import { parseIntent } from "./scenarios";
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost");
@@ -14,6 +16,8 @@ const server = createServer(async (request, response) => {
     response.writeHead(404).end();
     return;
   }
+  let trace: TurnTrace | undefined;
+  let traceOutcome: "ok" | "error" = "error";
   try {
     let raw = "";
     for await (const chunk of request) {
@@ -27,13 +31,23 @@ const server = createServer(async (request, response) => {
       response.writeHead(400).end(JSON.stringify({ error: "invalid request ID" }));
       return;
     }
-    const result = await runSimulatedTurn(requestId.value);
+    const intent = typeof input === "object" && input !== null && "intent" in input ? parseIntent(input.intent) : undefined;
+    if (intent === undefined) {
+      response.writeHead(400).end(JSON.stringify({ error: "invalid intent" }));
+      return;
+    }
+    trace = createTurnTrace(requestId.value, intent);
+    const result = await runSimulatedTurn(requestId.value, intent, trace);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify(result));
+    traceOutcome = "ok";
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : "unknown turn error"}\n`);
+    process.stderr.write(`${JSON.stringify({ event: "local_load.turn_error", traceId: trace?.snapshot("error").traceId ?? null,
+      errorType: error instanceof Error ? error.name : "unknown" })}\n`);
     response.writeHead(500, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: "turn failed" }));
+    response.end(JSON.stringify({ error: "turn failed", traceId: trace?.snapshot("error").traceId ?? null }));
+  } finally {
+    if (trace !== undefined) process.stdout.write(`${JSON.stringify(trace.snapshot(traceOutcome))}\n`);
   }
 });
 
