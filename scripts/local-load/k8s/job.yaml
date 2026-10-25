@@ -18,7 +18,7 @@ spec:
             - name: LOAD_TURNS
               value: "1000"
             - name: LOAD_CONCURRENCY
-              value: "64"
+              value: "100"
             - name: AGENT_URL
               value: http://agent:3002
             - name: SQLITE_URL

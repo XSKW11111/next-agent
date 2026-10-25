@@ -1,15 +1,19 @@
 import { performance } from "node:perf_hooks";
 import { getEncoding } from "js-tiktoken";
+import type { Intent } from "./scenarios";
 
 const encoder = getEncoding("cl100k_base");
 
 export type SpanName = "model.complete" | "redis.get" | "redis.set" | "sqlite.sessions" | "sqlite.streak" | "sqlite.messages";
 type Span = { readonly name: SpanName; readonly durationMs: number; readonly status: "ok" | "error" };
 
-export function createTurnTrace(requestId: string) {
+export function createTurnTrace(requestId: string, intent: Intent) {
   const spans: Span[] = [];
   const tokens = { input: 0, output: 0 };
+  let tool: string | null = null;
+  let resultKind: string | null = null;
   return {
+    recordTool(name: string, kind: string): void { tool = name; resultKind = kind; },
     async span<T>(name: SpanName, operation: () => Promise<T>): Promise<T> {
       const started = performance.now();
       try {
@@ -29,6 +33,9 @@ export function createTurnTrace(requestId: string) {
       return {
         event: "local_load.agent_trace",
         traceId: requestId,
+        intent,
+        tool,
+        resultKind,
         recordedAt: new Date().toISOString(),
         pod: process.env.HOSTNAME ?? "unknown",
         outcome,

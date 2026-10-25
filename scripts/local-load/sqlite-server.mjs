@@ -26,8 +26,7 @@ const readMessage = database.prepare("SELECT content FROM messages WHERE session
 const counts = database.prepare(`
   SELECT (SELECT COUNT(*) FROM sessions) AS sessions,
          (SELECT COUNT(*) FROM messages WHERE role = 'customer') AS customers,
-         (SELECT COUNT(*) FROM messages WHERE role = 'assistant') AS assistants,
-         (SELECT COUNT(*) FROM messages WHERE role = 'assistant' AND content != 'Your order #W002 is shipped.') AS wrong_replies
+         (SELECT COUNT(*) FROM messages WHERE role = 'assistant') AS assistants
 `);
 
 function validId(value) {
@@ -42,7 +41,7 @@ async function body(request) {
   let raw = "";
   for await (const chunk of request) {
     raw += chunk;
-    if (raw.length > 16_384) throw new Error("request too large");
+    if (raw.length > 64_000) throw new Error("request too large");
   }
   return JSON.parse(raw);
 }
@@ -57,6 +56,15 @@ export const server = createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
     if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true });
     if (request.method === "GET" && url.pathname === "/stats") return json(response, 200, counts.get());
+    if (request.method === "POST" && url.pathname === "/messages/readback") {
+      const input = await body(request);
+      if (!record(input) || !Array.isArray(input.ids) || input.ids.length > 1000 ||
+          input.ids.some((id) => !validId(id))) return json(response, 400, { error: "invalid message IDs" });
+      return json(response, 200, input.ids.map((id) => ({ id,
+        customerText: readMessage.get(id, id, "customer")?.content ?? null,
+        reply: readMessage.get(id, id, "assistant")?.content ?? null,
+      })));
+    }
     if (request.method === "POST" && url.pathname === "/sessions") {
       const input = await body(request);
       if (!record(input) || !validId(input.id)) return json(response, 400, { error: "invalid session id" });

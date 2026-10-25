@@ -3,6 +3,7 @@ import { parse } from "../../src/domain/parse";
 import { sessionIdSchema } from "../../src/domain/session";
 import { runSimulatedTurn } from "./agent-turn";
 import { createTurnTrace, type TurnTrace } from "./turn-trace";
+import { parseIntent } from "./scenarios";
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost");
@@ -30,8 +31,13 @@ const server = createServer(async (request, response) => {
       response.writeHead(400).end(JSON.stringify({ error: "invalid request ID" }));
       return;
     }
-    trace = createTurnTrace(requestId.value);
-    const result = await runSimulatedTurn(requestId.value, trace);
+    const intent = typeof input === "object" && input !== null && "intent" in input ? parseIntent(input.intent) : undefined;
+    if (intent === undefined) {
+      response.writeHead(400).end(JSON.stringify({ error: "invalid intent" }));
+      return;
+    }
+    trace = createTurnTrace(requestId.value, intent);
+    const result = await runSimulatedTurn(requestId.value, intent, trace);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify(result));
     traceOutcome = "ok";

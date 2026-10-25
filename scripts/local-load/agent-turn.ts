@@ -1,20 +1,24 @@
 import { parse } from "../../src/domain/parse";
 import { orderNumberSchema } from "../../src/domain/order";
 import type { SessionId } from "../../src/domain/session";
+import type { Proposal, SupportCase } from "../../src/domain/handoff";
+import type { EarlyRisersCodeRecord } from "../../src/service/business/promotion/claim-early-risers";
 import { runSupportTurn, type ScriptedModel, type SupportTurnDependencies } from "../../src/service/agent/support-turn";
 import { redisCommand } from "./redis-client";
 import type { TurnTrace } from "./turn-trace";
+import { scenarioForIntent, validateScenarioResult, type Intent, type Scenario } from "./scenarios";
 
 const sqliteUrl = process.env.SQLITE_URL ?? "http://sqlite:3001";
 const redisHost = process.env.REDIS_HOST ?? "redis";
 const redisPort = Number(process.env.CACHE_REDIS_PORT ?? "6379");
 const cacheKey = "local-load:orders:ada@example.com";
-const customerText = "Where is order W002?";
-export const expectedReply = "Your order #W002 is shipped.";
 const orderFixture = "W002:shipped:1Z";
 
-export type CacheOutcome = "hit" | "miss" | "unavailable";
+export type CacheOutcome = "hit" | "miss" | "unavailable" | "not_used";
 export type TurnReply = {
+  readonly intent: Intent;
+  readonly tool: Scenario["tool"];
+  readonly resultKind: string;
   readonly sessionId: SessionId;
   readonly turnId: SessionId;
   readonly reply: string;
@@ -33,17 +37,10 @@ async function sqlite(path: string, method: string, value?: unknown): Promise<un
   return response.json();
 }
 
-const model: ScriptedModel = {
-  complete({ messages }) {
-    if (messages.some((message) => message.role === "tool")) return { text: expectedReply };
-    return {
-      text: "Looking up the order.",
-      toolCalls: [{ id: "lookup-1", name: "lookup_order", args: { email: "ada@example.com", order_number: "W002" } }],
-    };
-  },
-};
-
 function dependencies(id: SessionId, trace: TurnTrace, recordCache: (outcome: CacheOutcome) => void): SupportTurnDependencies {
+  const promotionCodes = new Map<string, EarlyRisersCodeRecord>();
+  const proposals = new Map<string, Proposal>();
+  const cases = new Map<string, SupportCase>();
   return {
     orders: {
       catalog: {
@@ -91,33 +88,50 @@ function dependencies(id: SessionId, trace: TurnTrace, recordCache: (outcome: Ca
     },
     products: {
       catalog: {
-        async matchProducts() { throw new Error("product search is outside this scenario"); },
-        async listProducts() { throw new Error("product search is outside this scenario"); },
+        async matchProducts() { return [{ product: { name: "Camp Mug", stockLevel: 4 }, similarity: 0.91 }]; },
+        async listProducts() { return [{ name: "Camp Mug", stockLevel: 4 }]; },
       },
-      embedder: { async embed() { throw new Error("product search is outside this scenario"); } },
+      embedder: { async embed() { return [1]; } },
     },
     promotion: {
-      session: { id, localTimezone: { kind: "unresolved" }, unmatchedOrderStreak: 0 },
+      session: { id, localTimezone: { kind: "resolved", name: "Asia/Shanghai" }, unmatchedOrderStreak: 0 },
       now: new Date("2026-10-08T00:00:00Z"),
-      store: { async insertOrReuse() { throw new Error("promotion is outside this scenario"); } },
+      store: { async insertOrReuse(key, create) {
+        const identity = `${key.sessionId}|${key.validOn}`;
+        const stored = promotionCodes.get(identity);
+        if (stored !== undefined) return stored;
+        const issued = create();
+        promotionCodes.set(identity, issued);
+        return issued;
+      } },
+      issueCode: () => "EARLY-LOCAL",
     },
     handoff: {
       turnId: id,
       proposalId: id,
       store: {
-        listProposals() { return []; },
-        findProposalForTurn() { return undefined; },
-        findProposal() { return undefined; },
-        saveProposal() { throw new Error("handoff is outside this scenario"); },
-        findCase() { return undefined; },
-        saveCase() { throw new Error("handoff is outside this scenario"); },
+        listProposals(sessionId) { return [...proposals.values()].filter((proposal) => proposal.sessionId === sessionId); },
+        findProposalForTurn(sessionId, turnId) {
+          return [...proposals.values()].find((proposal) => proposal.sessionId === sessionId && proposal.turnId === turnId);
+        },
+        findProposal(proposalId) { return proposals.get(proposalId); },
+        saveProposal(proposal) { proposals.set(proposal.id, proposal); },
+        findCase(caseId) { return cases.get(caseId); },
+        saveCase(supportCase) { cases.set(supportCase.id, supportCase); },
       },
     },
   };
 }
 
-export async function runSimulatedTurn(id: SessionId, trace: TurnTrace): Promise<TurnReply> {
-  let cacheOutcome: CacheOutcome = "unavailable";
+export async function runSimulatedTurn(id: SessionId, intent: Intent, trace: TurnTrace): Promise<TurnReply> {
+  const scenario = scenarioForIntent(intent);
+  let cacheOutcome: CacheOutcome = "not_used";
+  const model: ScriptedModel = {
+    complete({ messages }) {
+      if (messages.some((message) => message.role === "tool")) return { text: scenario.reply };
+      return { text: `Running ${scenario.tool}.`, toolCalls: [{ id: "tool-1", name: scenario.tool, args: scenario.args }] };
+    },
+  };
   const tracedModel: ScriptedModel = {
     async complete(input) {
       const output = await trace.span("model.complete", async () => model.complete(input));
@@ -128,19 +142,21 @@ export async function runSimulatedTurn(id: SessionId, trace: TurnTrace): Promise
   const result = await runSupportTurn({
     model: tracedModel,
     sessionId: id,
-    customerText,
+    customerText: scenario.customerText,
     priorMessages: [],
     dependencies: dependencies(id, trace, (outcome) => { cacheOutcome = outcome; }),
   });
-  if (result.draft !== expectedReply || result.toolTraces.length !== 1 || result.toolTraces[0]?.tool !== "lookup_order") {
-    throw new Error("agent result did not match the expected order lookup");
+  const payload = result.toolPayloads[0];
+  const kind = typeof payload === "object" && payload !== null && "kind" in payload ? payload.kind : undefined;
+  if (result.toolTraces.length !== 1 || result.toolPayloads.length !== 1 ||
+      !validateScenarioResult(scenario, result.toolTraces[0]?.tool ?? "lookup_order", kind, payload, result.draft)) {
+    throw new Error(`agent result did not match ${intent}`);
   }
-  const lookup = result.toolPayloads[0];
-  if (typeof lookup !== "object" || lookup === null || !("kind" in lookup) || lookup.kind !== "orders_found") {
-    throw new Error(`order lookup failed: ${JSON.stringify(lookup)}`);
-  }
-  await trace.span("sqlite.messages", () => sqlite("/messages", "POST", { sessionId: id, turnId: id, customerText, reply: result.draft }));
+  trace.recordTool(scenario.tool, scenario.resultKind);
+  await trace.span("sqlite.messages", () => sqlite("/messages", "POST", { sessionId: id, turnId: id,
+    customerText: scenario.customerText, reply: result.draft }));
   const estimatedTokens = trace.snapshot("ok").estimatedTokens;
-  return { sessionId: id, turnId: id, reply: result.draft, cacheOutcome, traceId: id,
+  return { intent, tool: scenario.tool, resultKind: scenario.resultKind, sessionId: id, turnId: id,
+    reply: result.draft, cacheOutcome, traceId: id,
     estimatedTokens: { input: estimatedTokens.input, output: estimatedTokens.output } };
 }

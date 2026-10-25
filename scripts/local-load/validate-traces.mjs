@@ -28,14 +28,23 @@ const mismatchedOutcomes = traffic.filter((record) => {
   const trace = traces.find((candidate) => candidate.traceId === record.traceId);
   return trace && trace.outcome !== record.outcome;
 }).map((record) => record.traceId);
+const mismatchedScenarios = traffic.filter((record) => {
+  const trace = traces.find((candidate) => candidate.traceId === record.traceId);
+  return trace && (trace.intent !== record.intent || trace.tool !== record.tool ||
+    (record.outcome === "ok" && trace.resultKind !== record.resultKind));
+}).map((record) => record.traceId);
 const summary = summaries[0];
+const intents = ["order_status", "product_search", "promotion_claim", "human_handoff"];
+const balanced = Number.isSafeInteger(summary?.requested) && summary.requested % intents.length === 0 &&
+  intents.every((intent) => traffic.filter((record) => record.intent === intent).length === summary.requested / intents.length &&
+    traces.filter((record) => record.intent === intent).length === summary.requested / intents.length);
 const valid = summaries.length === 1 && traffic.length === summary?.requested &&
   traffic.length === trafficIds.size && traces.length === traceIds.size &&
   missingAgentTraces.length === 0 && unpairedAgentTraces.length === 0 && mismatchedTokens.length === 0 &&
-  mismatchedOutcomes.length === 0 &&
+  mismatchedOutcomes.length === 0 && mismatchedScenarios.length === 0 && balanced &&
   traffic.filter((record) => record.outcome === "ok").length === summary.successes;
 
 process.stdout.write(`${JSON.stringify({ event: "local_load.reconciliation", valid,
   trafficRecords: traffic.length, agentTraces: traces.length,
-  missingAgentTraces, unpairedAgentTraces, mismatchedTokens, mismatchedOutcomes })}\n`);
+  missingAgentTraces, unpairedAgentTraces, mismatchedTokens, mismatchedOutcomes, mismatchedScenarios, balanced })}\n`);
 if (!valid) process.exitCode = 1;
