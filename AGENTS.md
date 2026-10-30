@@ -1,5 +1,20 @@
 # Agent instructions
 
+## Output language (ASD-STE100)
+
+When you explain work or emit text to the user, write in
+[ASD-STE100](https://www.asd-ste100.org/) Simplified Technical English.
+
+- Keep sentence structure direct: subject, verb, object.
+- Use active voice.
+- Prefer short sentences. Prefer one idea in each sentence.
+- Use simple, approved words when you can. Avoid filler and vague words.
+- Use the imperative mood for instructions.
+- Do not nest clauses or stack noun modifiers.
+- Keep technical terms, code identifiers, and file paths exact.
+- These rules apply to explanations, summaries, plans, and other emitted output.
+  They do not change code style or required file formats.
+
 ## Coding style
 
 [CODING_STYLE.md](CODING_STYLE.md) gives the coding style for this repository.
