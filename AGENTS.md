@@ -2,20 +2,37 @@
 
 ## Coding style
 
-[CODING_STYLE.md](CODING_STYLE.md) is the coding style for this repository. [TYPESCRIPT_STYLE.md](TYPESCRIPT_STYLE.md) extends it for TypeScript and presentation. Read both before planning, implementing, reviewing, or testing a code change, and follow them.
+[CODING_STYLE.md](CODING_STYLE.md) gives the coding style for this repository.
+[TYPESCRIPT_STYLE.md](TYPESCRIPT_STYLE.md) adds rules for TypeScript and presentation.
+Read both files before you plan, implement, review, or test a code change.
+Follow both files.
 
-Domain language for this support agent is in [GLOSSARY.md](GLOSSARY.md). The current design is in [next-agent-system-architecture.md](next-agent-system-architecture.md).
+[GLOSSARY.md](GLOSSARY.md) gives the domain language for this support agent.
+[next-agent-system-architecture.md](next-agent-system-architecture.md) gives the current design.
 
 ## UI
 
-This project uses [shadcn/ui](https://ui.shadcn.com). The style is `base-nova`, and the configuration is [components.json](components.json). Components live in `src/components/ui`. Add a component with `npx shadcn@latest add <name>` instead of copying a registry file by hand.
+This project uses [shadcn/ui](https://ui.shadcn.com).
+The style is `base-nova`.
+The configuration is in [components.json](components.json).
+UI components are in `src/components/ui`.
+To add a component, run `npx shadcn@latest add <name>`.
+Do not copy a registry file by hand.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
 ## This is NOT the Next.js you know
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+This version has breaking changes.
+APIs, conventions, and file structure can differ from your training data.
+Before you write code, read the related guide in `node_modules/next/dist/docs/`.
+Find that path from this file's directory.
+In a monorepo, the `next` package can be absent from the repository root.
+Obey deprecation notices.
 
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+`next dev` writes and restores this block.
+Confirm the source at `node_modules/next/dist/server/lib/generate-agent-files.js`.
+If you remove this block from a diff, `next` will add it again as an uncommitted change.
+If you commit this block with your work, the tree stays clean.
 
 <!-- END:nextjs-agent-rules -->
