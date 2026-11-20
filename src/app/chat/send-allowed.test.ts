@@ -2,60 +2,23 @@ import { describe, expect, test } from "vitest";
 import { sendAllowed } from "./send-allowed";
 
 describe("sendAllowed", () => {
-  test("a new chat can send before any history load", () => {
-    expect(
-      sendAllowed({
-        failed: false,
-        restoreHistory: false,
-        historyReady: false,
-        status: "ready",
-      }),
-    ).toBe(true);
+  test("empty text cannot be sent", () => {
+    expect(sendAllowed({ text: "", status: "ready" })).toBe(false);
   });
 
-  test("a restored chat waits until history is ready", () => {
-    expect(
-      sendAllowed({
-        failed: false,
-        restoreHistory: true,
-        historyReady: false,
-        status: "ready",
-      }),
-    ).toBe(false);
-    expect(
-      sendAllowed({
-        failed: false,
-        restoreHistory: true,
-        historyReady: true,
-        status: "ready",
-      }),
-    ).toBe(true);
+  test("whitespace cannot be sent", () => {
+    expect(sendAllowed({ text: " \n\t ", status: "ready" })).toBe(false);
   });
 
-  test("a failed start and an in-flight reply stay blocked", () => {
-    expect(
-      sendAllowed({
-        failed: true,
-        restoreHistory: false,
-        historyReady: true,
-        status: "ready",
-      }),
-    ).toBe(false);
-    expect(
-      sendAllowed({
-        failed: false,
-        restoreHistory: false,
-        historyReady: true,
-        status: "submitted",
-      }),
-    ).toBe(false);
-    expect(
-      sendAllowed({
-        failed: false,
-        restoreHistory: false,
-        historyReady: true,
-        status: "streaming",
-      }),
-    ).toBe(false);
+  test("non-empty text can be sent while ready", () => {
+    expect(sendAllowed({ text: "where is my order", status: "ready" })).toBe(true);
+  });
+
+  test("non-empty text cannot be sent while submitted", () => {
+    expect(sendAllowed({ text: "where is my order", status: "submitted" })).toBe(false);
+  });
+
+  test("non-empty text cannot be sent while streaming", () => {
+    expect(sendAllowed({ text: "where is my order", status: "streaming" })).toBe(false);
   });
 });

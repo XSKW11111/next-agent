@@ -1,13 +1,5 @@
-export type SendGate = {
-  readonly failed: boolean;
-  readonly restoreHistory: boolean;
-  readonly historyReady: boolean;
-  readonly status: string;
-};
-
-export function sendAllowed(gate: SendGate): boolean {
-  if (gate.failed) return false;
-  if (gate.status === "submitted" || gate.status === "streaming") return false;
-  if (gate.restoreHistory && !gate.historyReady) return false;
+export function sendAllowed(decision: { readonly text: string; readonly status: string }): boolean {
+  if (decision.text.trim() === "") return false;
+  if (decision.status === "submitted" || decision.status === "streaming") return false;
   return true;
 }

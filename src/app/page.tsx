@@ -1,5 +1,5 @@
-import { ChatPanel } from "./chat-panel";
+import { SessionRedirect } from "./session-redirect";
 
 export default function Page() {
-  return <ChatPanel />;
+  return <SessionRedirect />;
 }
